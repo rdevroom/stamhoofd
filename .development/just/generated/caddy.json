@@ -1,0 +1,306 @@
+{
+  "apps": {
+    "http": {
+      "servers": {
+        "stamhoofd": {
+          "listen": [
+            "127.0.0.1:443",
+            "127.0.0.1:80"
+          ],
+          "routes": [
+            {
+              "match": [
+                {
+                  "host": [
+                    "renderer.stamhoofd"
+                  ]
+                }
+              ],
+              "handle": [
+                {
+                  "handler": "reverse_proxy",
+                  "upstreams": [
+                    {
+                      "dial": "127.0.0.1:9093"
+                    }
+                  ],
+                  "headers": {
+                    "request": {
+                      "set": {
+                        "x-real-ip": [
+                          "{http.request.remote}"
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "match": [
+                {
+                  "host": [
+                    "api.stamhoofd",
+                    "*.api.stamhoofd"
+                  ]
+                }
+              ],
+              "handle": [
+                {
+                  "handler": "reverse_proxy",
+                  "upstreams": [
+                    {
+                      "dial": "127.0.0.1:9091"
+                    }
+                  ],
+                  "headers": {
+                    "request": {
+                      "set": {
+                        "x-real-ip": [
+                          "{http.request.remote}"
+                        ]
+                      }
+                    }
+                  }
+                },
+                {
+                  "handler": "headers",
+                  "response": {
+                    "set": {
+                      "Cache-Control": [
+                        "no-store"
+                      ]
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "match": [
+                {
+                  "host": [
+                    "dashboard.stamhoofd"
+                  ]
+                }
+              ],
+              "handle": [
+                {
+                  "handler": "reverse_proxy",
+                  "load_balancing": {
+                    "retries": 5
+                  },
+                  "upstreams": [
+                    {
+                      "dial": "127.0.0.1:8080"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "match": [
+                {
+                  "host": [
+                    "be.shop.stamhoofd",
+                    "nl.shop.stamhoofd"
+                  ]
+                }
+              ],
+              "handle": [
+                {
+                  "handler": "reverse_proxy",
+                  "load_balancing": {
+                    "retries": 5
+                  },
+                  "upstreams": [
+                    {
+                      "dial": "127.0.0.1:8082"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "match": [
+                {
+                  "host": [
+                    "*.be.registration.stamhoofd",
+                    "*.nl.registration.stamhoofd"
+                  ]
+                }
+              ],
+              "handle": [
+                {
+                  "handler": "reverse_proxy",
+                  "load_balancing": {
+                    "retries": 5
+                  },
+                  "upstreams": [
+                    {
+                      "dial": "127.0.0.1:8081"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "match": [
+                {
+                  "vars_regexp": {
+                    "{http.request.host}": {
+                      "pattern": "^inschrijven\\."
+                    }
+                  }
+                }
+              ],
+              "handle": [
+                {
+                  "handler": "reverse_proxy",
+                  "load_balancing": {
+                    "retries": 5
+                  },
+                  "upstreams": [
+                    {
+                      "dial": "127.0.0.1:8081"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "match": [
+                {
+                  "host": [
+                    "files.stamhoofd"
+                  ]
+                }
+              ],
+              "handle": [
+                {
+                  "handler": "reverse_proxy",
+                  "upstreams": [
+                    {
+                      "dial": "127.0.0.1:9000"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "match": [
+                {
+                  "host": [
+                    "files-console.stamhoofd"
+                  ]
+                }
+              ],
+              "handle": [
+                {
+                  "handler": "reverse_proxy",
+                  "upstreams": [
+                    {
+                      "dial": "127.0.0.1:9001"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "match": [
+                {
+                  "host": [
+                    "mail.stamhoofd"
+                  ]
+                }
+              ],
+              "handle": [
+                {
+                  "handler": "reverse_proxy",
+                  "upstreams": [
+                    {
+                      "dial": "127.0.0.1:1080"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "match": [
+                {
+                  "host": [
+                    "sso.stamhoofd"
+                  ]
+                }
+              ],
+              "handle": [
+                {
+                  "handler": "reverse_proxy",
+                  "upstreams": [
+                    {
+                      "dial": "127.0.0.1:5556"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "handle": [
+                {
+                  "handler": "reverse_proxy",
+                  "load_balancing": {
+                    "retries": 5
+                  },
+                  "upstreams": [
+                    {
+                      "dial": "127.0.0.1:8082"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "tls": {
+      "automation": {
+        "policies": [
+          {
+            "subjects": [
+              "dashboard.stamhoofd",
+              "api.stamhoofd",
+              "*.api.stamhoofd",
+              "*.be.registration.stamhoofd",
+              "*.nl.registration.stamhoofd",
+              "be.shop.stamhoofd",
+              "nl.shop.stamhoofd",
+              "renderer.stamhoofd",
+              "files.stamhoofd",
+              "files-console.stamhoofd",
+              "mail.stamhoofd",
+              "sso.stamhoofd"
+            ],
+            "on_demand": false,
+            "issuers": [
+              {
+                "module": "internal"
+              }
+            ]
+          },
+          {
+            "on_demand": true,
+            "issuers": [
+              {
+                "module": "internal"
+              }
+            ]
+          }
+        ],
+        "on_demand": {}
+      }
+    }
+  },
+  "admin": {
+    "listen": "127.0.0.1:2020"
+  }
+}

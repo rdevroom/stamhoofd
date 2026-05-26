@@ -170,24 +170,6 @@ export class Registration extends AutoEncoder implements ObjectWithRecords {
         return this.trialUntil !== null && (this.deactivatedAt ? (this.trialUntil >= this.deactivatedAt) : (this.trialUntil > new Date()));
     }
 
-    get description() {
-        const descriptions: string[] = [];
-
-        if (this.group.settings.getFilteredPrices().length > 1) {
-            descriptions.push(this.groupPrice.name.toString());
-        }
-
-        for (const option of this.options) {
-            descriptions.push(option.optionMenu.name + ': ' + option.option.name + (option.option.allowAmount ? ` x ${option.amount}` : ''));
-        }
-
-        for (const answer of this.recordAnswers.values()) {
-            descriptions.push(answer.descriptionValue);
-        }
-
-        return descriptions.filter(d => !!d).join('\n');
-    }
-
     doesMatchFilter(filter: StamhoofdFilter) {
         try {
             const compiledFilter = compileToInMemoryFilter(filter, registrationInMemoryFilterCompilers);

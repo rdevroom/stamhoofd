@@ -1,0 +1,19 @@
+stamhoofd {
+    log
+
+    template IN A {
+        answer "{{ .Name }} 300 IN A 127.0.0.1"
+    }
+
+    template IN AAAA {
+        answer "{{ .Name }} 300 IN AAAA ::1"
+    }
+}
+
+use-application-dns.net {
+    log
+}
+
+. {
+    forward . 8.8.8.8 9.9.9.9
+}
