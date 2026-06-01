@@ -1,4 +1,4 @@
-import { getProjectPath } from '@stamhoofd/build-development-env';
+import { getProjectPath } from '@stamhoofd/cli';
 import { cp, readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { CaddyConfigHelper } from './CaddyConfigHelper.js';

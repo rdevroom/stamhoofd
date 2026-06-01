@@ -55,6 +55,20 @@ You can read the documentation of the most important building blocks of Stamhoof
 - Afterwards install pnpm: `npm install --global pnpm`.
 - Run `pnpm install`
 
+#### Local development CLI
+
+Use the Stamhoofd CLI for local setup and development:
+
+```bash
+pnpm install
+pnpm stam setup
+pnpm stam dev all
+```
+
+`pnpm stam setup` checks required tools, DNS, and local HTTPS certificate trust. `pnpm stam dev all` starts the shared Docker services and app processes. Run `pnpm stam status` to see local URLs, credentials, services, and active instances.
+
+For all local development commands, environments, services, SSO, tests, and troubleshooting, see [`shared/cli/README.md`](shared/cli/README.md).
+
 Using MacOS or Linux is recommended. Setup using WSL can be difficult because Stamhoofd relies on local DNS and trusted local HTTPS certificates.
 
 #### Optional dependencies
@@ -66,12 +80,14 @@ These dependencies are optional, and mostly used for internal development.
 
 #### Environments
 
-Use `STAMHOOFD_ENV=<name>` to run another local environment:
+Use `--env <name>` with CLI commands to run another local environment:
 
 ```bash
-STAMHOOFD_ENV=keeo pnpm dev
-STAMHOOFD_ENV=ravot pnpm dev
+pnpm stam dev all --env keeo
+pnpm stam config explain --env ravot
 ```
+
+Run `pnpm stam config explain` or `pnpm stam config print` to inspect the resolved domains, ports, and backend environment values.
 
 #### VSCode (optional)
 
@@ -82,16 +98,16 @@ STAMHOOFD_ENV=ravot pnpm dev
 To run everything locally, use:
 
 ```bash
-pnpm dev
+pnpm stam dev all
 ```
 
-You should not get a certificate error once local DNS and Caddy trust are configured correctly. Never manually trust an individual certificate.
+The CLI prints the dashboard and API URLs after startup. You should not get a certificate error after `pnpm stam setup` has completed successfully. Never manually trust an individual certificate; use `pnpm stam setup cert` if certificate trust needs to be repaired.
 
 Feel free to contact us via hello@stamhoofd.be if you have questions about development and how to set it up.
 
 #### Firefox
 
-Firefox does not always use the root SSL certificates of your system. If Firefox still shows certificate errors, open the Keychain app on MacOS and search for 'Caddy' in your login keychain.
+Firefox does not always use the root SSL certificates of your system. First run `pnpm stam setup cert`. If Firefox still shows certificate errors, open the Keychain app on MacOS and search for 'Caddy' in your login keychain.
 
 ![Caddy root certificate](.development/images/caddy-root.png)
 
@@ -101,7 +117,7 @@ In Firefox, go to Settings > Privacy and security. Scroll down to certificates. 
 
 ### E-mails
 
-Stamhoofd bundles with MailDev to test emails in development. This is started when running the local development environment.
+Stamhoofd uses MailDev to test emails in development. It is started by `pnpm stam dev all` and `pnpm stam services up`. Run `pnpm stam status` to see the MailDev URL and credentials.
 
 ### Backend
 

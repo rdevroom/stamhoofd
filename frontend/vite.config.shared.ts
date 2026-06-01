@@ -29,8 +29,8 @@ export async function buildConfig(options: { name: 'dashboard' | 'registration' 
         }
         else if (!process.env.NODE_ENV || process.env.NODE_ENV === 'development') {
             console.log('Building env for development...', process.env.NODE_ENV);
-            const builder = await import('@stamhoofd/build-development-env');
-            const builtEnv = await builder.build(process.env.STAMHOOFD_ENV ?? '', {
+            const builder = await import('@stamhoofd/cli');
+            const builtEnv = await builder.buildDevelopmentEnvironment(process.env.STAMHOOFD_ENV ?? '', {
                 frontend: options.name,
             });
             console.log('Built env for development.', process.env.NODE_ENV);
@@ -114,8 +114,8 @@ export async function buildConfig(options: { name: 'dashboard' | 'registration' 
                     warmup: {
                         clientFiles: [
                             ...(options?.clientFiles ?? []),
-                            resolve(import.meta.dirname, './shared') + '/**/*.vue',
-                            resolve(import.meta.dirname, './shared') + '/**/*.ts',
+                            resolve(import.meta.dirname, './shared') + '/*/index.ts',
+                            resolve(import.meta.dirname, './shared') + '/*/src/**/*.vue',
                         ],
                     },
                 }
@@ -182,12 +182,8 @@ export async function buildConfig(options: { name: 'dashboard' | 'registration' 
             },
             preprocessorOptions: {
                 scss: {
-                    // Scss will change in a future version to resolve &'s in the same order as native CSS.
-                    // This is a pretty big change in the code base, and probably won't really affect us.
-                    // We'll need to fix this when SCSS changes the resolution order in the next version.
-                    // More info at https://sass-lang.com/d/mixed-decls
                     // color-functions: deprecated some aliasses. Easy to fix later.
-                    silenceDeprecations: ['mixed-decls', 'color-functions', 'slash-div'],
+                    silenceDeprecations: ['color-functions', 'slash-div'],
                 },
             },
         },
