@@ -1,0 +1,90 @@
+import chalk from 'chalk';
+
+export function friendlyMigrationName(file: string): string {
+    const withoutExtension = file.replace(/\.[^.]+$/, '');
+    const withoutPrefix = withoutExtension.replace(/^\d+[-_]+/, '');
+    const words = withoutPrefix.replace(/[-_]+/g, ' ').trim();
+    if (!words) {
+        return file;
+    }
+    return words.replace(/\b\w/g, letter => letter.toUpperCase());
+}
+
+export function formatMigrationLabel(file: string): string {
+    if (file === 'base') {
+        return 'Empty database';
+    }
+    return `${friendlyMigrationName(file)}\n${chalk.dim(file)}`;
+}
+
+export function formatRelativeTime(value: string | Date | undefined, now = new Date()): string {
+    const date = parseDate(value);
+    if (!date) {
+        return '-';
+    }
+
+    const diffSeconds = Math.round((date.getTime() - now.getTime()) / 1000);
+    const absolute = Math.abs(diffSeconds);
+    const rtf = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' });
+    const units: Array<[Intl.RelativeTimeFormatUnit, number]> = [
+        ['year', 60 * 60 * 24 * 365],
+        ['month', 60 * 60 * 24 * 30],
+        ['week', 60 * 60 * 24 * 7],
+        ['day', 60 * 60 * 24],
+        ['hour', 60 * 60],
+        ['minute', 60],
+        ['second', 1],
+    ];
+    const [unit, seconds] = units.find(([, size]) => absolute >= size) ?? ['second', 1];
+    return rtf.format(Math.round(diffSeconds / seconds), unit);
+}
+
+export function formatExactTime(value: string | Date | undefined): string {
+    const date = parseDate(value);
+    if (!date) {
+        return '-';
+    }
+    return new Intl.DateTimeFormat(undefined, {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+    }).format(date);
+}
+
+export function formatDuration(start: string | Date | undefined, end: string | Date | undefined): string {
+    const startDate = parseDate(start);
+    const endDate = parseDate(end);
+    if (!startDate || !endDate) {
+        return '-';
+    }
+    const totalSeconds = Math.max(0, Math.round((endDate.getTime() - startDate.getTime()) / 1000));
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    if (minutes === 0) {
+        return `${seconds}s`;
+    }
+    return `${minutes}m ${seconds}s`;
+}
+
+export function formatStatus(status: string): string {
+    if (status === 'success') {
+        return 'Success';
+    }
+    if (status === 'failed') {
+        return 'Failed';
+    }
+    if (status === 'base') {
+        return 'Base only';
+    }
+    return 'Unknown';
+}
+
+function parseDate(value: string | Date | undefined): Date | undefined {
+    if (!value) {
+        return undefined;
+    }
+    const date = value instanceof Date ? value : new Date(value);
+    return Number.isNaN(date.getTime()) ? undefined : date;
+}

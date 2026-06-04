@@ -1,10 +1,11 @@
+import fs from 'node:fs/promises';
 import path from 'node:path';
 import { buildRequiredPackages } from './build.js';
 import { compareCatalogs, createMigrationCatalog, selectMigrations, sha256File } from './catalog.js';
 import { labelsForManifest } from './labels.js';
 import { MysqlImageDatabase } from './mysql-image-database.js';
 import { createCliContainerRuntime, runCommand } from './runtime.js';
-import type { BaseImageOptions, BaseImageResult, MigrationChainResult, MigrationExecutionResult, MigrationImageManifest, RunMigrationChainOptions } from './types.js';
+import type { BaseImageOptions, BaseImageResult, MigrationChainResult, MigrationExecutionResult, MigrationImageManifest, RunMigrationChainOptions, StaleMigrationOutput } from './types.js';
 
 const defaultMysqlImage = 'docker.io/library/mysql:8.4';
 
@@ -148,6 +149,27 @@ export async function runMigrationChain(options: RunMigrationChainOptions): Prom
     return { chainId, catalog, changedFiles, results };
 }
 
+export async function detectStaleMigrationOutputs(rootDir = process.cwd()): Promise<StaleMigrationOutput[]> {
+    const catalog = await createMigrationCatalog(rootDir);
+    const stale: StaleMigrationOutput[] = [];
+    for (const migration of catalog.entries) {
+        if (!migration.sourcePath.endsWith('.ts')) {
+            continue;
+        }
+        const compiledPath = compiledMigrationPath(rootDir, migration);
+        const source = await fs.stat(migration.sourcePath);
+        const compiled = await fs.stat(compiledPath).catch(() => undefined);
+        if (!compiled) {
+            stale.push({ normalizedFile: migration.normalizedFile, sourcePath: migration.sourcePath, compiledPath, status: 'missing' });
+            continue;
+        }
+        if (compiled.mtimeMs < source.mtimeMs) {
+            stale.push({ normalizedFile: migration.normalizedFile, sourcePath: migration.sourcePath, compiledPath, status: 'stale' });
+        }
+    }
+    return stale;
+}
+
 function createChainId(): string {
     return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -161,7 +183,7 @@ async function assertImageMissing(runtime: { inspectImage(image: string): Promis
     throw new Error(`Image already exists: ${image}`);
 }
 
-function compiledMigrationPath(rootDir: string, migration: { sourcePath: string }): string {
+export function compiledMigrationPath(rootDir: string, migration: { sourcePath: string }): string {
     const relative = path.relative(rootDir, migration.sourcePath).replace(/\.ts$/, '.js');
     if (relative.startsWith('backend/app/api/src/')) {
         return path.join(rootDir, 'backend/app/api/dist/src', relative.slice('backend/app/api/src/'.length));
