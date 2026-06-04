@@ -85,11 +85,9 @@ export async function runDev(context: CliContext, target: DevTarget, options: { 
                 servicesState = await sharedServicesRunning(context)
                     ? PrerequisiteState.Ready
                     : PrerequisiteState.Missing;
-            }
-            catch {
+            } catch {
                 servicesState = PrerequisiteState.Missing;
-            }
-            finally {
+            } finally {
                 setStatus();
                 servicesCheckPromise = undefined;
             }
@@ -118,8 +116,7 @@ export async function runDev(context: CliContext, target: DevTarget, options: { 
                 startedServices = result.started.length > 0;
                 servicesState = PrerequisiteState.Ready;
                 setStatus();
-            }
-            catch (error) {
+            } catch (error) {
                 servicesState = PrerequisiteState.Missing;
                 setStatus();
                 throw error;
@@ -214,13 +211,11 @@ export async function runDev(context: CliContext, target: DevTarget, options: { 
                             await stopServices(context, sharedServiceDefinitions);
                             output.stop({ persistStatus: true });
                             output.log(`${successSymbol} Shared services stopped because this session started them`);
-                        }
-                        else {
+                        } else {
                             output.stop({ persistStatus: true });
                         }
                         output.log(`${successSymbol} Development session stopped`);
-                    }
-                    finally {
+                    } finally {
                         if (forceShutdownTimer) {
                             clearTimeout(forceShutdownTimer);
                         }
@@ -270,15 +265,13 @@ export async function runDev(context: CliContext, target: DevTarget, options: { 
                             return;
                         }
                         resolveOnce();
-                    }
-                    catch (error) {
+                    } catch (error) {
                         rejectOnce(error);
                     }
                 })();
             });
         });
-    }
-    finally {
+    } finally {
         setActiveOutputTarget(undefined);
     }
 }

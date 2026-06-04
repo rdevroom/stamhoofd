@@ -8,6 +8,7 @@ export default class CheckLint extends BaseCommand {
         'stam check lint',
         'stam check lint --verbose',
     ];
+
     static flags = BaseCommand.verboseFlags;
 
     async run(): Promise<void> {

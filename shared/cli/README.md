@@ -39,6 +39,7 @@ Run `yarn stam --help` or `yarn stam <topic> --help` for command help.
 | Config | `yarn stam config print` | Print resolved domains and backend environment values as JSON. |
 | Database | `yarn stam db shell` | Open a MySQL shell for the current local database. |
 | Database | `yarn stam db migrate` | Build shared packages and run migrations. |
+| Migrations | `yarn stam migrations` | Build inspectable local migration image chains. See [`src/commands/migrations/README.md`](src/commands/migrations/README.md). |
 | SSO | `yarn stam sso config` | Print local SSO client, user, and issuer settings. |
 | SSO | `yarn stam sso start <redirect-uri>` | Start Keycloak and import the local realm. |
 | SSO | `yarn stam sso logs` | Tail Keycloak logs. |

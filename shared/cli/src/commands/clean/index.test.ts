@@ -44,7 +44,7 @@ describe('Clean command', () => {
     it('shows help when no target is provided', async () => {
         const command = createCommand({
             args: { target: undefined },
-            flags: { yes: false, 'dry-run': false, verbose: false },
+            flags: { "yes": false, 'dry-run': false, "verbose": false },
         });
 
         await command.run();
@@ -56,7 +56,7 @@ describe('Clean command', () => {
     it('runs build cleanup directly', async () => {
         const command = createCommand({
             args: { target: CleanTarget.Build },
-            flags: { yes: false, 'dry-run': true, verbose: false },
+            flags: { "yes": false, 'dry-run': true, "verbose": false },
         });
 
         await command.run();
@@ -67,7 +67,7 @@ describe('Clean command', () => {
     it('stops services and deletes service data', async () => {
         const command = createCommand({
             args: { target: CleanTarget.Services },
-            flags: { yes: true, 'dry-run': false, verbose: false },
+            flags: { "yes": true, 'dry-run': false, "verbose": false },
         });
 
         await command.run();
@@ -80,7 +80,7 @@ describe('Clean command', () => {
         const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
         const command = createCommand({
             args: { target: CleanTarget.All },
-            flags: { yes: false, 'dry-run': true, verbose: false },
+            flags: { "yes": false, 'dry-run': true, "verbose": false },
         });
 
         await command.run();
@@ -98,7 +98,7 @@ describe('Clean command', () => {
         vi.mocked(confirm).mockResolvedValue(false);
         const command = createCommand({
             args: { target: CleanTarget.Services },
-            flags: { yes: false, 'dry-run': false, verbose: false },
+            flags: { "yes": false, 'dry-run': false, "verbose": false },
         });
 
         await command.run();
@@ -111,7 +111,7 @@ describe('Clean command', () => {
     it('rejects env for targets that do not use it', async () => {
         const command = createCommand({
             args: { target: CleanTarget.Build },
-            flags: { yes: false, 'dry-run': false, verbose: false, env: 'keeo' },
+            flags: { "yes": false, 'dry-run': false, "verbose": false, "env": 'keeo' },
         });
         (command as any).error = vi.fn((message: string) => {
             throw new Error(message);
@@ -123,7 +123,7 @@ describe('Clean command', () => {
     it('rejects name for targets that do not use it', async () => {
         const command = createCommand({
             args: { target: CleanTarget.Services },
-            flags: { yes: false, 'dry-run': false, verbose: false, name: 'feature-payments' },
+            flags: { "yes": false, 'dry-run': false, "verbose": false, "name": 'feature-payments' },
         });
         (command as any).error = vi.fn((message: string) => {
             throw new Error(message);
@@ -133,7 +133,7 @@ describe('Clean command', () => {
     });
 });
 
-function createCommand(parseResult: { args: { target: CleanTarget | undefined }; flags: { yes: boolean; 'dry-run': boolean; verbose: boolean; env?: string; name?: string } }): Clean {
+function createCommand(parseResult: { args: { target: CleanTarget | undefined }; flags: { "yes": boolean; 'dry-run': boolean; "verbose": boolean; "env"?: string; "name"?: string } }): Clean {
     const command = new Clean([], {} as any);
     (command as any).config = {};
     (command as any).parse = vi.fn(async () => parseResult);

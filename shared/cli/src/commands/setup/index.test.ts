@@ -16,7 +16,7 @@ describe('Setup command', () => {
     it('runs the full setup flow without an action', async () => {
         const command = createCommand({
             args: { action: undefined },
-            flags: { yes: false, 'dry-run': false, verbose: false },
+            flags: { "yes": false, 'dry-run': false, "verbose": false },
         });
 
         await command.run();
@@ -29,7 +29,7 @@ describe('Setup command', () => {
     it('runs dns setup directly', async () => {
         const command = createCommand({
             args: { action: SetupAction.Dns },
-            flags: { yes: true, 'dry-run': true, verbose: true },
+            flags: { "yes": true, 'dry-run': true, "verbose": true },
         });
 
         await command.run();
@@ -41,7 +41,7 @@ describe('Setup command', () => {
     it('runs cert setup directly', async () => {
         const command = createCommand({
             args: { action: SetupAction.Cert },
-            flags: { yes: true, 'dry-run': true, verbose: false },
+            flags: { "yes": true, 'dry-run': true, "verbose": false },
         });
 
         await command.run();
@@ -51,7 +51,7 @@ describe('Setup command', () => {
     });
 });
 
-function createCommand(parseResult: { args: { action: SetupAction | undefined }; flags: { yes: boolean; 'dry-run': boolean; verbose: boolean } }): Setup {
+function createCommand(parseResult: { args: { action: SetupAction | undefined }; flags: { "yes": boolean; 'dry-run': boolean; "verbose": boolean } }): Setup {
     const command = new Setup([], {} as any);
     (command as any).config = {};
     (command as any).parse = vi.fn(async () => parseResult);

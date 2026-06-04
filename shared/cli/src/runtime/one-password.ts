@@ -92,8 +92,7 @@ async function readFileCache(file: string, key: string, account: string): Promis
         if (entry.version === cacheVersion && entry.key === key && entry.account === account && entry.value) {
             return entry.value;
         }
-    }
-    catch {
+    } catch {
         // Cache misses and corrupt cache files should not block development startup.
     }
     return '';
@@ -105,8 +104,7 @@ async function writeFileCache(file: string, entry: CacheEntry): Promise<void> {
         const tempFile = `${file}.${process.pid}.tmp`;
         await fs.writeFile(tempFile, JSON.stringify(entry, null, 4), { mode: 0o600 });
         await fs.rename(tempFile, file);
-    }
-    catch {
+    } catch {
         // 1Password remains the source of truth; cache writes are best effort.
     }
 }

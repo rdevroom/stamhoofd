@@ -64,7 +64,7 @@ async function appPortsAvailable(context: CliContext): Promise<boolean> {
 
 async function occupiedAppPorts(context: CliContext): Promise<Array<{ name: AppPortName; port: number }>> {
     const ports = buildPorts(context);
-    const results = await Promise.all(appPortNames.map(async (name) => ({
+    const results = await Promise.all(appPortNames.map(async name => ({
         name,
         port: ports[name],
         available: await isPortAvailable(ports[name]),
@@ -76,7 +76,7 @@ async function occupiedAppPorts(context: CliContext): Promise<Array<{ name: AppP
 }
 
 async function isPortAvailable(port: number): Promise<boolean> {
-    return await new Promise(resolve => {
+    return await new Promise((resolve) => {
         const server = net.createServer();
 
         server.once('error', (error: NodeJS.ErrnoException) => {

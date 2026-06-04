@@ -14,6 +14,11 @@
             "import": "./dist/src/migrate.js",
             "require": "./dist/src/migrate.js"
         },
+        "./single-migration": {
+            "types": "./dist/src/migrations-runner/run-single.d.ts",
+            "import": "./dist/src/migrations-runner/run-single.js",
+            "require": "./dist/src/migrations-runner/run-single.js"
+        },
         "./boot": {
             "types": "./dist/src/boot.d.ts",
             "import": "./dist/src/boot.js",
@@ -42,6 +47,7 @@
         "test": "vitest",
         "test:reset": "yarn -s build:full && yarn -s test",
         "migrations": "yarn -s build:full && node ./dist/migrations.js",
+        "single-migration": "yarn -s build && node ./dist/single-migration.js",
         "lint": "eslint"
     },
     "devDependencies": {

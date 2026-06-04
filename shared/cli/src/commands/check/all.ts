@@ -8,6 +8,7 @@ export default class CheckAll extends BaseCommand {
         'stam check all',
         'stam check all --env keeo',
     ];
+
     static flags = BaseCommand.environmentFlags;
 
     async run(): Promise<void> {

@@ -8,6 +8,7 @@ export default class CheckTypecheck extends BaseCommand {
         'stam check typecheck',
         'stam check typecheck --verbose',
     ];
+
     static flags = BaseCommand.verboseFlags;
 
     async run(): Promise<void> {

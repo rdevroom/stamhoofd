@@ -119,8 +119,7 @@ export async function listInstanceManifests(context: CliContext, options: { writ
 
     try {
         files = (await fs.readdir(instanceDir(context))).filter(file => file.endsWith('.json'));
-    }
-    catch (error) {
+    } catch (error) {
         if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
             return [];
         }
@@ -130,8 +129,7 @@ export async function listInstanceManifests(context: CliContext, options: { writ
     const manifests = await Promise.all(files.map(async (file) => {
         try {
             return JSON.parse(await fs.readFile(path.join(instanceDir(context), file), 'utf-8')) as InstanceManifest;
-        }
-        catch (error) {
+        } catch (error) {
             // One corrupt manifest should not hide the rest of the active instances.
             writeOutputLine(`${chalk.yellow('!')} Ignoring invalid instance manifest ${file}: ${error instanceof Error ? error.message : String(error)}`);
             return undefined;
