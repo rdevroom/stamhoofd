@@ -51,4 +51,26 @@ describe('MigrationsRerun command', () => {
             allowChangedFiles: true,
         }));
     });
+
+    it('suggests a new tag prefix when a generated image already exists', async () => {
+        vi.mocked(runMigrationChain).mockRejectedValueOnce(new Error('Image already exists: stamhoofd-migrations/rerun:0010-failed'));
+        const command = new MigrationsRerun([], {} as any);
+        (command as any).parse = vi.fn(async () => ({
+            flags: {
+                env: 'stamhoofd',
+                verbose: false,
+                chain: 'old-chain',
+                from: '0010-failed.ts',
+                'tag-prefix': 'stamhoofd-migrations/rerun',
+                database: 'stamhoofd-development',
+                'continue-on-failure': false,
+                'allow-changed-files': false,
+                build: 'skip',
+                'mysql-image': 'mysql:8.4',
+            },
+        }));
+        (command as any).createContext = vi.fn(async () => ({ rootDir: '/repo', env: 'stamhoofd', verbose: false }));
+
+        await expect(command.run()).rejects.toThrow('Choose a different --tag-prefix');
+    });
 });

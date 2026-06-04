@@ -2,6 +2,7 @@ import { resolveRerunStart, runMigrationChain } from '@stamhoofd/migrations-mana
 import { Flags } from '@oclif/core';
 import { BaseCommand } from '../../base-command.js';
 import { buildBackendEnv } from '../../config/build-config.js';
+import { improveImageConflictError } from './errors.js';
 
 export default class MigrationsRerun extends BaseCommand {
     static summary = 'Rerun migrations from a selected migration';
@@ -35,7 +36,7 @@ export default class MigrationsRerun extends BaseCommand {
             mysqlImage: flags['mysql-image'],
             verbose: flags.verbose,
             env: buildBackendEnv(context),
-        });
+        }).catch(error => improveImageConflictError(error, '--tag-prefix'));
         console.log(`Chain: ${result.chainId}`);
         for (const migration of result.results) {
             console.log(`${migration.status.toUpperCase()} ${migration.migration.normalizedFile} -> ${migration.image}`);

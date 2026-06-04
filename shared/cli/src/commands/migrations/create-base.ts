@@ -1,6 +1,7 @@
 import { createBaseImage } from '@stamhoofd/migrations-manager';
 import { Flags } from '@oclif/core';
 import { BaseCommand } from '../../base-command.js';
+import { improveImageConflictError } from './errors.js';
 
 export default class MigrationsCreateBase extends BaseCommand {
     static summary = 'Create a base database image from a plain dump';
@@ -21,7 +22,7 @@ export default class MigrationsCreateBase extends BaseCommand {
             tag: flags.tag,
             mysqlImage: flags['mysql-image'],
             verbose: flags.verbose,
-        });
+        }).catch(error => improveImageConflictError(error, '--tag'));
         console.log(`Created base image ${result.image} (${result.imageId})`);
         console.log(`Chain: ${result.chainId}`);
         if (result.dumpSha256) {
