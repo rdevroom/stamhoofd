@@ -44,6 +44,8 @@ yarn stam migrations create-base --dump ~/Downloads/stamhoofd-development.dump -
 yarn stam migrations apply --base stamhoofd-migrations/dev:base --tag-prefix stamhoofd-migrations/dev --database stamhoofd-development
 yarn stam migrations list
 yarn stam migrations inspect --image stamhoofd-migrations/dev:0001-1593773929-create-initial-tables
+yarn stam migrations inspect --image stamhoofd-migrations/dev:0001-1593773929-create-initial-tables --catalog --labels
+yarn stam migrations inspect --image stamhoofd-migrations/dev:0001-1593773929-create-initial-tables --json
 yarn stam migrations rerun --chain <chain-id> --from <migration-file> --tag-prefix stamhoofd-migrations/dev-rerun --database stamhoofd-development
 ```
 
@@ -218,6 +220,12 @@ Use `inspect` to read the labels and manifest:
 yarn stam migrations inspect --image <image>
 ```
 
+By default, `inspect` prints a concise summary. Add flags when you need more detail:
+
+- `--json`: print the complete metadata and manifest JSON.
+- `--catalog`: include the stored migration catalog entries.
+- `--labels`: include image labels.
+
 ## Listing Chains
 
 Use `list` to see all locally created migration chains:
@@ -226,7 +234,7 @@ Use `list` to see all locally created migration chains:
 yarn stam migrations list
 ```
 
-The list command looks for images with `be.stamhoofd.migrations=true`, groups them by chain id, and reports the latest successful or failed migration.
+The list command looks for images with `be.stamhoofd.migrations=true`, groups them by chain id, and reports the database, status, base image, latest successful migration, failed migration, image count, timestamp, and parent chain when available.
 
 ```txt
 local Docker/Podman images
@@ -313,11 +321,13 @@ yarn --cwd shared/cli -s build
 ## Practical Tips
 
 - Use unique tag prefixes, such as `stamhoofd-migrations/my-test` or `stamhoofd-migrations/issue-123`.
+- Reusing a tag prefix fails if one of the generated image tags already exists. Choose a new `--tag-prefix` for every experimental apply or rerun.
 - Full chains can take a long time because every migration starts MySQL and commits an image.
 - Full chains can use a lot of disk space because every migration creates a local image.
 - Use `--build skip` only after you know the compiled backend and CLI outputs are current.
 - Prefer an empty base when you want to validate the full migration history.
 - Prefer a dump base when you want to reproduce a real database state.
+- Use `yarn stam` for normal command usage. Use `yarn stam-dev` while editing `shared/cli` so the local CLI is rebuilt before it runs.
 
 ## Cleanup
 

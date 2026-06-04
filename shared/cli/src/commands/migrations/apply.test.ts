@@ -47,4 +47,25 @@ describe('MigrationsApply command', () => {
             env: { DB_DATABASE: 'stamhoofd-development' },
         }));
     });
+
+    it('suggests a new tag prefix when a generated image already exists', async () => {
+        vi.mocked(runMigrationChain).mockRejectedValueOnce(new Error('Image already exists: stamhoofd-migrations/dev:0001-create'));
+        const command = new MigrationsApply([], {} as any);
+        (command as any).parse = vi.fn(async () => ({
+            flags: {
+                env: 'keeo',
+                verbose: false,
+                base: 'stamhoofd-migrations/dev:base',
+                'tag-prefix': 'stamhoofd-migrations/dev',
+                database: 'stamhoofd-development',
+                'continue-on-failure': false,
+                'allow-changed-files': false,
+                build: 'skip',
+                'mysql-image': 'mysql:8.4',
+            },
+        }));
+        (command as any).createContext = vi.fn(async () => ({ rootDir: '/repo', env: 'keeo', verbose: false }));
+
+        await expect(command.run()).rejects.toThrow('Choose a different --tag-prefix');
+    });
 });
