@@ -11,6 +11,9 @@
     "references": [
         {
             "path": "../types/tsconfig.build.json"
+        },
+        {
+            "path": "../migrations-manager/tsconfig.build.json"
         }
     ],
     "exclude": [

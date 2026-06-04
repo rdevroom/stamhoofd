@@ -8,6 +8,7 @@ export default class DbMigrate extends BaseCommand {
         'stam db migrate --env keeo',
         'stam db migrate --name feature-payments',
     ];
+
     static flags = BaseCommand.instanceFlags;
 
     async run(): Promise<void> {

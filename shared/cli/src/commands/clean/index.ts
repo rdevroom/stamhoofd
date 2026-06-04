@@ -37,7 +37,7 @@ export default class Clean extends BaseCommand {
         }),
     };
 
-    static flags = { ...BaseCommand.instanceFlags, yes: yesFlag, 'dry-run': dryRunFlag };
+    static flags = { ...BaseCommand.instanceFlags, "yes": yesFlag, 'dry-run': dryRunFlag };
 
     async run(): Promise<void> {
         const { args, flags } = await this.parse(Clean);

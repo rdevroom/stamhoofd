@@ -28,13 +28,13 @@ vi.mock('../services/definitions/coredns-service.js', () => ({
     corednsService: { status: vi.fn() },
 }));
 
-vi.mock('../services/docker.js', async (importOriginal) => ({
+vi.mock('../services/docker.js', async importOriginal => ({
     ...await importOriginal<typeof import('../services/docker.js')>(),
     getContainerRuntime: vi.fn(),
     containerIsRunning: vi.fn(),
 }));
 
-vi.mock('../runtime/ux.js', async (importOriginal) => ({
+vi.mock('../runtime/ux.js', async importOriginal => ({
     ...await importOriginal<typeof import('../runtime/ux.js')>(),
     confirm: vi.fn(),
 }));
@@ -156,8 +156,7 @@ describe('setup machine workflow', () => {
 
         try {
             await runSetup({ verbose: false } as any);
-        }
-        finally {
+        } finally {
             console.log = original;
         }
 
@@ -324,8 +323,7 @@ describe('setup machine workflow', () => {
 
         try {
             printSetupReport(setupReport({ caddy: { ok: true, details: '127.0.0.1:4080, 127.0.0.1:4443, admin 127.0.0.1:2021' } }));
-        }
-        finally {
+        } finally {
             console.log = original;
         }
 
@@ -335,7 +333,6 @@ describe('setup machine workflow', () => {
         expect(messages.join('\n')).toContain('127.0.0.1:4080, 127.0.0.1:4443, admin 127.0.0.1:2021');
     });
 });
-
 
 function setupReport(overrides: Partial<SetupReport>): SetupReport {
     return {

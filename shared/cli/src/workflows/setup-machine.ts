@@ -557,8 +557,7 @@ async function runSetupCheck(row: TableRow, label: string, check: Promise<CheckR
         const result = await check;
         row.update(setupRow(label, result));
         return result;
-    }
-    catch (error) {
+    } catch (error) {
         row.update([
             label,
             statusCell(CliStatus.Failed),

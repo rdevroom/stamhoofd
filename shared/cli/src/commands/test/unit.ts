@@ -9,6 +9,7 @@ export default class TestUnit extends BaseCommand {
         'stam test unit',
         'stam test unit --ci --verbose',
     ];
+
     static flags = { ...BaseCommand.verboseFlags, ci: ciFlag };
 
     async run(): Promise<void> {

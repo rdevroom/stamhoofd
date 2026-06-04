@@ -3,7 +3,7 @@ import Dev from './index.js';
 import { DevTarget, runDev } from '../../workflows/start-dev.js';
 import { showHelp } from '../../runtime/show-help.js';
 
-vi.mock('../../workflows/start-dev.js', async (importOriginal) => ({
+vi.mock('../../workflows/start-dev.js', async importOriginal => ({
     ...await importOriginal<typeof import('../../workflows/start-dev.js')>(),
     runDev: vi.fn(),
 }));

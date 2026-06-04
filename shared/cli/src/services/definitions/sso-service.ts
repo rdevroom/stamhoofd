@@ -42,8 +42,7 @@ export class SsoService extends DockerService<SsoStartOptions, SsoPrepared> {
         const args = ['run'];
         if (options.background) {
             args.push('-d');
-        }
-        else {
+        } else {
             args.push('--rm');
         }
         args.push('--name', SsoService.container(context), '-p', `${localIpv4Host}:${ports.sso}:${ssoInternalPort}`, '-e', `KC_BOOTSTRAP_ADMIN_USERNAME=${ssoAdminUser}`, '-e', `KC_BOOTSTRAP_ADMIN_PASSWORD=${ssoAdminPassword}`, '-e', 'KC_HTTP_RELATIVE_PATH=/dex', '-v', `${prepared.importDir}:/opt/keycloak/data/import:ro`, 'quay.io/keycloak/keycloak:26.0.7', 'start-dev', '--import-realm', '--hostname', `https://${domains.sso}/dex`, '--proxy-headers=xforwarded');

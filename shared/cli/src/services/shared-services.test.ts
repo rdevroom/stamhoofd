@@ -14,7 +14,7 @@ vi.mock('../runtime/command-runner.js', () => ({
     run: vi.fn(),
 }));
 
-vi.mock('./docker.js', async (importOriginal) => ({
+vi.mock('./docker.js', async importOriginal => ({
     ...await importOriginal<typeof import('./docker.js')>(),
     getContainerRuntime: vi.fn(async () => ContainerRuntime.Podman),
 }));

@@ -33,8 +33,7 @@ export async function step<T>(message: string, fn: () => Promise<T>, options: { 
         const result = await fn();
         spinner.stopAndPersist({ symbol: chalk.green(successSymbol), text: options.successMessage?.(result) ?? message });
         return result;
-    }
-    catch (error) {
+    } catch (error) {
         spinner.fail(message);
         throw error;
     }

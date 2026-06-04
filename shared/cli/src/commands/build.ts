@@ -8,6 +8,7 @@ export default class Build extends BaseCommand {
         'stam build --env keeo',
         'stam build --verbose',
     ];
+
     static flags = BaseCommand.environmentFlags;
 
     async run(): Promise<void> {

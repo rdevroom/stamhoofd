@@ -38,8 +38,7 @@ describe('ux helpers', () => {
             for (const line of output.split('\n')) {
                 expect(stripVTControlCharacters(line).length).toBeLessThanOrEqual(47);
             }
-        }
-        finally {
+        } finally {
             Object.defineProperty(process.stdout, 'columns', { configurable: true, value: originalColumns });
         }
     });
