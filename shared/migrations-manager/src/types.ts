@@ -132,6 +132,7 @@ export type MigrationImageDetails = {
     image: string;
     metadata: ImageMetadata;
     manifest?: MigrationImageManifest;
+    logs?: string;
 };
 
 export type RerunStart = {
@@ -143,8 +144,48 @@ export type RerunStart = {
 
 export type ResolveRerunStartOptions = {
     chainId: string;
-    from: string;
+    from?: string;
     runtime?: ContainerRuntime;
+};
+
+export type CleanupPlan = {
+    chains: Array<{
+        chainId: string;
+        images: ImageSummary[];
+    }>;
+    images: ImageSummary[];
+};
+
+export type CleanupOptions = {
+    chainIds?: string[];
+    tagPrefix?: string;
+    runtime?: ContainerRuntime;
+};
+
+export type CleanupResult = {
+    removed: string[];
+};
+
+export type StaleMigrationOutput = {
+    normalizedFile: string;
+    sourcePath: string;
+    compiledPath: string;
+    status: 'missing' | 'stale';
+};
+
+export type MigrationDiffOptions = {
+    from: string;
+    to: string;
+    database: string;
+    outputPath?: string;
+    runtime?: ContainerRuntime;
+};
+
+export type MigrationDiffResult = {
+    from: string;
+    to: string;
+    outputPath?: string;
+    preview: string;
 };
 
 export type RunResult = {

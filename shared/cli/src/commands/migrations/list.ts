@@ -2,6 +2,7 @@ import { listMigrationImages } from '@stamhoofd/migrations-manager';
 import type { ImageSummary, MigrationImageOverview } from '@stamhoofd/migrations-manager';
 import { BaseCommand } from '../../base-command.js';
 import { formatTable } from '../../runtime/ux.js';
+import { formatMigrationLabel, formatRelativeTime, formatStatus } from '../../migrations/format.js';
 
 export default class MigrationsList extends BaseCommand {
     static summary = 'List local migration image chains';
@@ -15,7 +16,7 @@ export default class MigrationsList extends BaseCommand {
             return;
         }
         console.log(formatTable(
-            ['Chain', 'Database', 'Status', 'Base', 'Latest success', 'Failed', 'Images', 'Timestamp', 'Parent chain'],
+            ['Chain', 'Status', 'Latest', 'Images', 'Updated', 'Next step'],
             chains.map(formatChainRow),
             { title: 'Migration image chains' },
         ));
@@ -26,14 +27,11 @@ function formatChainRow(chain: MigrationImageOverview): string[] {
     const latest = chain.failed ?? chain.latestSuccess ?? chain.base;
     return [
         chain.chainId,
-        latest?.labels['be.stamhoofd.migrations.database'] ?? chain.base?.labels['be.stamhoofd.migrations.database'] ?? '-',
-        chain.status,
-        imageReference(chain.base),
-        migrationLabel(chain.latestSuccess),
-        migrationLabel(chain.failed),
-        String(chain.images.length),
-        latest?.labels['be.stamhoofd.migrations.finished-at'] ?? latest?.createdAt ?? '-',
-        latest?.labels['be.stamhoofd.migrations.parent-chain'] ?? latest?.labels['be.stamhoofd.migrations.forked-from-chain'] ?? '-',
+        formatStatus(chain.status),
+        migrationLabel(latest),
+        `${chain.images.length} ${chain.images.length === 1 ? 'image' : 'images'}`,
+        formatRelativeTime(latest?.labels['be.stamhoofd.migrations.finished-at'] ?? latest?.createdAt),
+        nextStep(chain),
     ];
 }
 
@@ -41,15 +39,18 @@ function migrationLabel(image: ImageSummary | undefined): string {
     if (!image) {
         return '-';
     }
-    return image.labels['be.stamhoofd.migrations.migration'] ?? 'base';
+    return formatMigrationLabel(image.labels['be.stamhoofd.migrations.migration'] ?? 'base');
 }
 
-function imageReference(image: ImageSummary | undefined): string {
-    if (!image) {
-        return '-';
+function nextStep(chain: MigrationImageOverview): string {
+    if (chain.status === 'failed') {
+        return 'Inspect logs';
     }
-    if (image.repository && image.tag && image.repository !== '<none>' && image.tag !== '<none>') {
-        return `${image.repository}:${image.tag}`;
+    if (chain.status === 'success') {
+        return 'Cleanup';
     }
-    return image.id;
+    if (chain.status === 'base') {
+        return 'Apply';
+    }
+    return 'Inspect';
 }

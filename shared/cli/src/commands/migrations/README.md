@@ -46,8 +46,14 @@ yarn stam migrations list
 yarn stam migrations inspect --image stamhoofd-migrations/dev:0001-1593773929-create-initial-tables
 yarn stam migrations inspect --image stamhoofd-migrations/dev:0001-1593773929-create-initial-tables --catalog --labels
 yarn stam migrations inspect --image stamhoofd-migrations/dev:0001-1593773929-create-initial-tables --json
-yarn stam migrations rerun --chain <chain-id> --from <migration-file> --tag-prefix stamhoofd-migrations/dev-rerun --database stamhoofd-development
+yarn stam migrations inspect --image stamhoofd-migrations/dev:0001-1593773929-create-initial-tables --logs
+yarn stam migrations rerun --chain <chain-id>
+yarn stam migrations cleanup --chain <chain-id> --dry-run
+yarn stam migrations diff --from <image> --to <image> --database stamhoofd-development
+yarn stam migrations diff --data --from <image> --to <image> --database stamhoofd-development
 ```
+
+Most commands are interactive in a terminal. When required flags are missing, the CLI asks for values and remembers non-sensitive choices per workspace in the user cache directory. In non-interactive scripts, required flags must be passed explicitly.
 
 ## Step 1: Create A Base Image
 
@@ -225,6 +231,8 @@ By default, `inspect` prints a concise summary. Add flags when you need more det
 - `--json`: print the complete metadata and manifest JSON.
 - `--catalog`: include the stored migration catalog entries.
 - `--labels`: include image labels.
+- `--logs`: print the stored migration log.
+- `--logs-lines <n>`: control the failed-log preview length.
 
 ## Listing Chains
 
@@ -234,7 +242,7 @@ Use `list` to see all locally created migration chains:
 yarn stam migrations list
 ```
 
-The list command looks for images with `be.stamhoofd.migrations=true`, groups them by chain id, and reports the database, status, base image, latest successful migration, failed migration, image count, timestamp, and parent chain when available.
+The list command looks for images with `be.stamhoofd.migrations=true`, groups them by chain id, and prints a compact overview with the chain status, friendly latest migration name, image count, relative update time, and suggested next step.
 
 ```txt
 local Docker/Podman images
@@ -276,6 +284,12 @@ yarn stam migrations rerun --chain <chain-id> --from 1734429094-registration-tri
 
 The resolver finds the image immediately before the selected migration and starts a new chain from that image. This also works for resuming after an interrupted command if the predecessor image was already committed.
 
+In a terminal, `rerun` can infer the failed migration and ask for any missing chain, tag prefix, or database values:
+
+```bash
+yarn stam migrations rerun --chain <chain-id>
+```
+
 ```txt
 Original chain:
 
@@ -310,6 +324,8 @@ When changed files are allowed, the new chain records the changed file metadata 
 - `--build skip`: assume compiled outputs are ready.
 - `--build force`: rebuild required packages before running.
 
+When `--build skip` is used, the CLI checks TypeScript migration sources against compiled JavaScript output. If output is missing or older than the source, an interactive terminal can switch to `--build force`; non-interactive runs stop instead of silently using stale code.
+
 Manual migration-chain testing is often faster with `--build skip` after running:
 
 ```bash
@@ -331,12 +347,28 @@ yarn --cwd shared/cli -s build
 
 ## Cleanup
 
-The commands create local images and containers only. They do not push to a registry.
-
-Remove only images with the tag prefixes you created. For example:
+Migration chains can create many local images. Cleanup removes only images labelled with `be.stamhoofd.migrations=true` and selected by exact chain id or tag prefix.
 
 ```bash
-podman rmi $(podman images --format '{{.Repository}}:{{.Tag}}' | grep '^localhost/stamhoofd-migrations/dev')
+yarn stam migrations cleanup
+yarn stam migrations cleanup --chain <chain-id> --dry-run
+yarn stam migrations cleanup --tag-prefix stamhoofd-migrations/dev --yes
 ```
 
-Use `docker` instead of `podman` if Docker was the runtime used on your machine.
+The default terminal flow asks which chains to remove, previews the selected images, and asks for confirmation. Non-interactive destructive cleanup requires `--chain` or `--tag-prefix` together with `--yes`.
+
+## Diff
+
+Schema diff compares two migration images with `mysqldump --no-data`, saves a unified diff, and prints a preview:
+
+```bash
+yarn stam migrations diff --from <image> --to <image> --database stamhoofd-development
+```
+
+Data diff is intentionally conservative and prints row-count summaries by table:
+
+```bash
+yarn stam migrations diff --data --from <image> --to <image> --database stamhoofd-development
+```
+
+Diff artifacts are saved in `.stamhoofd/migrations-diffs/` unless `--output` is provided.
