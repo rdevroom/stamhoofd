@@ -1,5 +1,5 @@
 import { createMigrationCatalog, inspectMigrationImage, listMigrationImages } from '@stamhoofd/migrations-manager';
-import type { ImageSummary, MigrationCatalogSnapshot, MigrationImageDetails, MigrationImageManifest, MigrationImageOverview } from '@stamhoofd/migrations-manager';
+import type { ImageSummary, MigrationCatalogSnapshot, MigrationImageDetails, MigrationImageManifest, MigrationImageOverview, MigrationTimingPhase } from '@stamhoofd/migrations-manager';
 import { Flags } from '@oclif/core';
 import { BaseCommand } from '../../base-command.js';
 import { formatTable } from '../../runtime/ux.js';
@@ -18,6 +18,7 @@ export default class MigrationsInspect extends BaseCommand {
         labels: Flags.boolean({ description: 'Include image labels', default: false }),
         logs: Flags.boolean({ description: 'Print migration logs', default: false }),
         'logs-lines': Flags.integer({ description: 'Number of log lines to print', default: 20 }),
+        timings: Flags.boolean({ description: 'Include timing summary for a chain', default: false }),
     };
 
     async run(): Promise<void> {
@@ -25,7 +26,7 @@ export default class MigrationsInspect extends BaseCommand {
         const context = await this.createContext(flags);
         const catalog = await createMigrationCatalog(context.rootDir);
         if (flags.chain) {
-            console.log(await formatChainOverview(flags.chain, catalog));
+            console.log(await formatChainOverview(flags.chain, catalog, flags.timings));
             return;
         }
         const chains = await listMigrationImages();
@@ -42,7 +43,7 @@ export default class MigrationsInspect extends BaseCommand {
             }));
             if (action === 'chain') {
                 const chain = await selectChain(chains, 'Which chain do you want to inspect?', undefined, catalog);
-                console.log(await formatChainOverview(chain, catalog));
+                console.log(await formatChainOverview(chain, catalog, flags.timings));
                 return;
             }
             const selected = action === 'browse'
@@ -121,7 +122,7 @@ function formatSummary(details: MigrationImageDetails, manifest: MigrationImageM
     return `${headline}\n\n${formatTable(['Field', 'Value'], rows, { title: 'Migration image' })}\n\n${nextSteps}`;
 }
 
-async function formatChainOverview(chainId: string, catalog: MigrationCatalogSnapshot): Promise<string> {
+async function formatChainOverview(chainId: string, catalog: MigrationCatalogSnapshot, includeTimings: boolean): Promise<string> {
     const chains = await listMigrationImages();
     const chain = chains.find(c => c.chainId === chainId);
     if (!chain) {
@@ -139,7 +140,57 @@ async function formatChainOverview(chainId: string, catalog: MigrationCatalogSna
     if (progress.next) {
         lines.push('', 'Next:', `○  ${formatMigrationProgress(progress.next.index + 1, progress.total)}  Not run  ${friendlyMigrationName(progress.next.normalizedFile)}`, `│             ${progress.next.normalizedFile}`);
     }
+    if (includeTimings) {
+        lines.push('', await formatTimingSummary(chain));
+    }
     return lines.join('\n');
+}
+
+async function formatTimingSummary(chain: MigrationImageOverview): Promise<string> {
+    const migrationImages = chain.images.filter(image => image.labels['be.stamhoofd.migrations.role'] === 'migration');
+    const details = await Promise.all(migrationImages.map(image => inspectMigrationImage({ image: imageReference(image) })));
+    const timed = details
+        .map((detail) => {
+            const migration = detail.manifest?.migration?.normalizedFile ?? detail.metadata.labels['be.stamhoofd.migrations.migration'];
+            const totalMs = detail.manifest?.timings?.totalMs;
+            return migration && typeof totalMs === 'number'
+                ? { migration, totalMs, phases: detail.manifest?.timings?.phases ?? [] }
+                : undefined;
+        })
+        .filter((item): item is { migration: string; totalMs: number; phases: MigrationTimingPhase[] } => item !== undefined);
+
+    if (timed.length === 0) {
+        return 'Timings: no timing data available in this chain.';
+    }
+
+    const phaseTotals = new Map<string, { totalMs: number; count: number }>();
+    for (const migration of timed) {
+        for (const phase of migration.phases) {
+            const current = phaseTotals.get(phase.name) ?? { totalMs: 0, count: 0 };
+            phaseTotals.set(phase.name, { totalMs: current.totalMs + phase.durationMs, count: current.count + 1 });
+        }
+    }
+
+    const slowestPhases = [...phaseTotals.entries()]
+        .sort((a, b) => b[1].totalMs - a[1].totalMs)
+        .slice(0, 8)
+        .map(([name, value]) => [name, formatMs(value.totalMs), formatMs(value.totalMs / value.count), String(value.count)]);
+    const slowestMigrations = timed
+        .sort((a, b) => b.totalMs - a.totalMs)
+        .slice(0, 8)
+        .map(item => [item.migration, formatMs(item.totalMs)]);
+
+    return [
+        formatTable(['Phase', 'Total', 'Average', 'Count'], slowestPhases, { title: 'Slowest timing phases' }),
+        formatTable(['Migration', 'Total'], slowestMigrations, { title: 'Slowest migrations' }),
+    ].join('\n\n');
+}
+
+function formatMs(ms: number): string {
+    if (ms >= 1000) {
+        return `${(ms / 1000).toFixed(2)}s`;
+    }
+    return `${Math.round(ms)}ms`;
 }
 
 function formatChainGraph(chain: MigrationImageOverview, catalog: MigrationCatalogSnapshot): string[] {
