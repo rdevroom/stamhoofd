@@ -25,6 +25,34 @@ export async function resolveTextFlag(value: string | undefined, flag: string, m
     return result;
 }
 
+export async function resolveTagPrefixFlag(value: string | undefined, chains: MigrationImageOverview[], defaultValue?: string): Promise<string> {
+    if (value) {
+        return value;
+    }
+    if (!isInteractive()) {
+        missingFlag('tag-prefix');
+    }
+
+    const options = tagPrefixOptions(chains, defaultValue);
+    if (options.length === 0) {
+        return await resolveTextFlag(undefined, 'tag-prefix', 'Which local tag prefix should migration layers use?', defaultValue);
+    }
+
+    const custom = '__custom__';
+    const selected = await select({
+        message: 'Which local tag prefix should migration layers use?',
+        default: defaultValue && options.includes(defaultValue) ? defaultValue : options[0],
+        choices: [
+            ...options.map(option => ({ name: option, value: option })),
+            { name: 'Custom...', value: custom },
+        ],
+    });
+    if (selected !== custom) {
+        return selected;
+    }
+    return await resolveTextFlag(undefined, 'tag-prefix', 'Enter a local tag prefix', defaultValue);
+}
+
 export async function resolveOptionalTextFlag(value: string | undefined, message: string, defaultValue: string): Promise<string> {
     if (value) {
         return value;
@@ -213,6 +241,21 @@ function chainSummary(chain: MigrationImageOverview): string {
     const label = migration ? friendlyMigrationName(migration) : formatMigrationLabel('base');
     const updated = formatRelativeTime(latest?.labels['be.stamhoofd.migrations.finished-at'] ?? latest?.createdAt);
     return `${formatStatusColor(chain.status)}, latest ${label.replace(/\n.*/, '')}, ${updated}`;
+}
+
+function tagPrefixOptions(chains: MigrationImageOverview[], defaultValue?: string): string[] {
+    const options = new Set<string>();
+    if (defaultValue) {
+        options.add(defaultValue);
+    }
+    for (const chain of chains) {
+        for (const image of chain.images) {
+            if (image.repository && image.repository !== '<none>') {
+                options.add(image.repository);
+            }
+        }
+    }
+    return [...options];
 }
 
 function imageKindChoices(chain: MigrationImageOverview): Array<{ name: string; value: string; disabled?: string }> {

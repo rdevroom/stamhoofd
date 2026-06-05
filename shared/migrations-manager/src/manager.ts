@@ -11,14 +11,16 @@ import type { BaseImageOptions, BaseImageResult, MigrationChainResult, Migration
 const defaultMysqlImage = 'docker.io/library/mysql:8.4';
 
 export async function createBaseImage(options: BaseImageOptions): Promise<BaseImageResult> {
+    const rootDir = options.rootDir ?? process.cwd();
     const runtime = options.runtime ?? await createCliContainerRuntime();
     const timer = new MigrationTimer();
     const mysqlImage = options.mysqlImage ?? defaultMysqlImage;
     const chainId = options.chainId ?? createChainId();
+    const catalog = await createMigrationCatalog(rootDir);
     const database = new MysqlImageDatabase(runtime, options.verbose ?? false);
     const dump = options.dump ? expandHome(options.dump) : undefined;
     const dumpSha256 = dump ? await sha256File(dump) : undefined;
-    const container = `stamhoofd-migrations-base-${chainId}`;
+    const container = safeContainerName(`stamhoofd-migrations-base-${chainId}`);
     const startedAt = new Date().toISOString();
     await timer.measure('assert-image-missing', { image: options.tag }, () => assertImageMissing(runtime, options.tag));
 
@@ -30,6 +32,10 @@ export async function createBaseImage(options: BaseImageOptions): Promise<BaseIm
         } else {
             timer.skipped('import-dump', { container, database: options.database });
         }
+        const baseProgress = await timer.measure('detect-applied-migrations', { container, database: options.database }, async () => {
+            const executed = await database.listExecutedMigrations(container, options.database);
+            return detectBaseMigrationProgress(catalog, executed);
+        });
         await timer.measure('prepare-metadata', { container }, () => Promise.resolve());
         const finishedAt = new Date().toISOString();
         const manifest: MigrationImageManifest = {
@@ -45,6 +51,11 @@ export async function createBaseImage(options: BaseImageOptions): Promise<BaseIm
             finishedAt,
             runtime: runtime.command,
             mysqlImage,
+            catalog,
+            baseMigrationCount: baseProgress.count,
+            baseMigrationTotal: catalog.entries.length,
+            baseLastMigration: baseProgress.last?.normalizedFile,
+            baseLastMigrationIndex: baseProgress.last?.index,
             timings: timer.snapshot(),
         };
         await database.writeManifest(container, manifest);
@@ -71,19 +82,27 @@ export async function runMigrationChain(options: RunMigrationChainOptions): Prom
         throw new Error(`Migration files changed since the previous chain: ${changedFiles.map(file => file.normalizedFile).join(', ')}`);
     }
 
-    const migrations = selectMigrations(catalog, options.startFrom);
+    const baseProgress = await readBaseMigrationProgress(runtime, options.baseImage);
+    const startFrom = options.startFrom ?? startFromBaseProgress(catalog, baseProgress);
+    const migrations = !options.startFrom && baseProgress.completed >= catalog.entries.length
+        ? []
+        : selectMigrations(catalog, startFrom);
     const database = new MysqlImageDatabase(runtime, options.verbose ?? false);
     const results: MigrationExecutionResult[] = [];
     let parentImage = options.baseImage;
+    const previousChainId = options.previousChainId ?? baseProgress.chainId;
+
+    options.onProgress?.({ type: 'start', chainId, total: migrations.length });
 
     for (const migration of migrations) {
         const tag = `${options.tagPrefix}:${String(migration.index + 1).padStart(4, '0')}-${slug(migration.normalizedFile)}`;
-        const container = `stamhoofd-migrations-${chainId}-${migration.index}`;
+        const container = safeContainerName(`stamhoofd-migrations-${chainId}-${migration.index}`);
         const startedAt = new Date().toISOString();
         let status: 'success' | 'failed' = 'success';
         let log = '';
         let error: string | undefined;
         const timer = new MigrationTimer();
+        options.onProgress?.({ type: 'migration:start', chainId, migration, completed: results.length, total: migrations.length });
         try {
             await timer.measure('assert-image-missing', { image: tag }, () => assertImageMissing(runtime, tag));
             await timer.measure('start-container', { image: parentImage, container, publishPort: true }, () => database.start(parentImage, container, { publishPort: true }));
@@ -140,7 +159,7 @@ export async function runMigrationChain(options: RunMigrationChainOptions): Prom
             logPath: `/stamhoofd-migrations/logs/${migration.normalizedFile}.log`,
             runtime: runtime.command,
             mysqlImage: options.mysqlImage ?? defaultMysqlImage,
-            previousChainId: options.previousChainId,
+            previousChainId,
             timings: timer.snapshot(),
         };
         await database.writeManifest(container, manifest, { [`${migration.normalizedFile}.log`]: log });
@@ -149,12 +168,14 @@ export async function runMigrationChain(options: RunMigrationChainOptions): Prom
         await runtime.remove(container);
 
         results.push({ migration, status, image: tag, imageId, startedAt, finishedAt, log, error });
+        options.onProgress?.({ type: 'migration:finish', chainId, result: results[results.length - 1], completed: results.length, total: migrations.length });
         parentImage = tag;
         if (status === 'failed' && !continueOnFailure) {
             break;
         }
     }
 
+    options.onProgress?.({ type: 'done', chainId, completed: results.length, total: migrations.length });
     return { chainId, catalog, changedFiles, results };
 }
 
@@ -181,6 +202,41 @@ export async function detectStaleMigrationOutputs(rootDir = process.cwd()): Prom
 
 function createChainId(): string {
     return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function safeContainerName(name: string): string {
+    return name.replace(/[^a-zA-Z0-9_.-]+/g, '-').replace(/^-+/, '').slice(0, 120);
+}
+
+function detectBaseMigrationProgress(catalog: Awaited<ReturnType<typeof createMigrationCatalog>>, executed: string[]): { count: number; last?: { index: number; normalizedFile: string } } {
+    const executedSet = new Set(executed.map(file => file.replace(/\.ts$/, '.js')));
+    const applied = catalog.entries.filter(entry => executedSet.has(entry.normalizedFile));
+    const last = applied.at(-1);
+    return { count: applied.length, last: last ? { index: last.index, normalizedFile: last.normalizedFile } : undefined };
+}
+
+async function readBaseMigrationProgress(runtime: { inspectImage(image: string): Promise<{ labels: Record<string, string> }> }, image: string): Promise<{ chainId?: string; completed: number }> {
+    try {
+        const metadata = await runtime.inspectImage(image);
+        const role = metadata.labels['be.stamhoofd.migrations.role'];
+        if (role !== 'base') {
+            return { completed: 0 };
+        }
+        const lastIndex = Number(metadata.labels['be.stamhoofd.migrations.base-last-migration-index']);
+        return {
+            chainId: metadata.labels['be.stamhoofd.migrations.chain'],
+            completed: Number.isFinite(lastIndex) ? lastIndex + 1 : Number(metadata.labels['be.stamhoofd.migrations.base-migration-count'] ?? 0),
+        };
+    } catch {
+        return { completed: 0 };
+    }
+}
+
+function startFromBaseProgress(catalog: Awaited<ReturnType<typeof createMigrationCatalog>>, progress: { completed: number }): string | undefined {
+    if (progress.completed <= 0) {
+        return undefined;
+    }
+    return catalog.entries[progress.completed]?.normalizedFile;
 }
 
 async function assertImageMissing(runtime: { inspectImage(image: string): Promise<unknown> }, image: string): Promise<void> {

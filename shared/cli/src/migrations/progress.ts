@@ -21,7 +21,9 @@ export function createChainProgress(chain: MigrationImageOverview, catalog: Migr
     const lastSuccess = chain.latestSuccess ?? successes.at(-1);
     const failed = chain.failed;
     const latest = failed ?? lastSuccess ?? chain.base;
-    const completed = lastSuccess ? Number(lastSuccess.labels['be.stamhoofd.migrations.migration-index'] ?? -1) + 1 : 0;
+    const baseLastIndex = Number(chain.base?.labels['be.stamhoofd.migrations.base-last-migration-index']);
+    const baseCompleted = Number.isFinite(baseLastIndex) ? baseLastIndex + 1 : Number(chain.base?.labels['be.stamhoofd.migrations.base-migration-count'] ?? 0);
+    const completed = lastSuccess ? Number(lastSuccess.labels['be.stamhoofd.migrations.migration-index'] ?? -1) + 1 : baseCompleted;
     const nextIndex = failed
         ? Number(failed.labels['be.stamhoofd.migrations.migration-index'] ?? completed)
         : completed;

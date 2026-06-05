@@ -22,12 +22,14 @@ export async function listMigrationImages(options: { runtime?: ContainerRuntime 
         const successes = sorted.filter(image => image.labels['be.stamhoofd.migrations.status'] === 'success');
         const base = sorted.find(image => image.labels['be.stamhoofd.migrations.role'] === 'base');
         const status: MigrationImageOverview['status'] = failed ? 'failed' : successes.length > 0 ? 'success' : base ? 'base' : 'unknown';
+        const latest = failed ?? successes.at(-1) ?? base;
         return {
             chainId,
             images: sorted,
             base,
             latestSuccess: successes.at(-1),
             failed,
+            parentChainId: latest?.labels['be.stamhoofd.migrations.parent-chain'],
             status,
         };
     }).sort((a, b) => latestImageDate(b).localeCompare(latestImageDate(a)));

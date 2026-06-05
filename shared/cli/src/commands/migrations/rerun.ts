@@ -5,7 +5,7 @@ import { buildBackendEnv } from '../../config/build-config.js';
 import { readMigrationChoiceCache, writeMigrationChoiceCache } from '../../migrations/cache.js';
 import { improveImageConflictError } from '../../migrations/errors.js';
 import { formatMigrationLabel } from '../../migrations/format.js';
-import { confirmAction, isInteractive, resolveBuildFlag, resolveOptionalTextFlag, resolveTextFlag, selectChain, selectMigrationFile } from '../../migrations/prompts.js';
+import { confirmAction, isInteractive, resolveBuildFlag, resolveTextFlag, selectChain, selectMigrationFile } from '../../migrations/prompts.js';
 
 export default class MigrationsRerun extends BaseCommand {
     static summary = 'Rerun migrations from a selected migration';
@@ -35,11 +35,11 @@ export default class MigrationsRerun extends BaseCommand {
         const tagPrefix = await resolveTextFlag(flags['tag-prefix'], 'tag-prefix', 'Which local tag prefix should the new chain use?', cache.migrations.tagPrefix ? `${cache.migrations.tagPrefix}-rerun` : undefined);
         const database = await resolveTextFlag(flags.database, 'database', 'Which database should be migrated?', cache.migrations.database);
         const build = await resolveBuildFlag(flags.build, cache.migrations.build);
-        const mysqlImage = await resolveOptionalTextFlag(flags['mysql-image'], 'Which MySQL image metadata value should be stored?', cache.migrations.mysqlImage ?? 'docker.io/library/mysql:8.4');
+        const mysqlImage = flags['mysql-image'];
         const effectiveBuild = await resolveStaleOutputs(context.rootDir, build);
         const start = await resolveRerunStart({ chainId: chain, from, runtime });
         console.log(`Rerun will start from the image before "${formatMigrationLabel(start.startFrom).split('\n')[0]}".`);
-        if (!await confirmAction('Continue?', true)) {
+        if (isInteractive() && !await confirmAction('Continue?', true)) {
             throw new Error('Rerun cancelled.');
         }
         const result = await runMigrationChain({
@@ -58,7 +58,7 @@ export default class MigrationsRerun extends BaseCommand {
             env: buildBackendEnv(context),
             runtime,
         }).catch(error => improveImageConflictError(error, '--tag-prefix'));
-        await writeMigrationChoiceCache(context.rootDir, { database, tagPrefix, build: effectiveBuild, mysqlImage, lastChainId: chain });
+        await writeMigrationChoiceCache(context.rootDir, { database, tagPrefix, build: effectiveBuild, ...(mysqlImage ? { mysqlImage } : {}), lastChainId: chain });
         console.log(`Chain: ${result.chainId}`);
         for (const migration of result.results) {
             console.log(`${migration.status.toUpperCase()} ${formatMigrationLabel(migration.migration.normalizedFile).replace('\n', ' ')} -> ${migration.image}`);

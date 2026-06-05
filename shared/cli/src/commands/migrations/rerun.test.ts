@@ -3,6 +3,9 @@ import { resolveRerunStart, runMigrationChain } from '@stamhoofd/migrations-mana
 import MigrationsRerun from './rerun.js';
 
 vi.mock('@stamhoofd/migrations-manager', () => ({
+    createCliContainerRuntime: vi.fn(async () => ({ command: 'docker' })),
+    detectStaleMigrationOutputs: vi.fn(async () => []),
+    listMigrationImages: vi.fn(async () => []),
     resolveRerunStart: vi.fn(async () => ({
         baseImage: 'stamhoofd-migrations/dev:0009-before',
         startFrom: '0010-failed.js',
@@ -41,7 +44,7 @@ describe('MigrationsRerun command', () => {
 
         await command.run();
 
-        expect(resolveRerunStart).toHaveBeenCalledWith({ chainId: 'old-chain', from: '0010-failed.ts' });
+        expect(resolveRerunStart).toHaveBeenCalledWith({ chainId: 'old-chain', from: '0010-failed.ts', runtime: expect.any(Object) });
         expect(runMigrationChain).toHaveBeenCalledWith(expect.objectContaining({
             rootDir: '/repo',
             baseImage: 'stamhoofd-migrations/dev:0009-before',

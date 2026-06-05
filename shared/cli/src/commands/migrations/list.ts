@@ -4,7 +4,7 @@ import chalk from 'chalk';
 import { BaseCommand } from '../../base-command.js';
 import { formatTable } from '../../runtime/ux.js';
 import { formatMigrationLabel, formatMigrationNumber, formatMigrationProgress, formatRelativeTime, formatStatusColor, friendlyMigrationName } from '../../migrations/format.js';
-import { createChainProgress, formatChainDisplay, imageReference } from '../../migrations/progress.js';
+import { chainDisplayName, createChainProgress, imageReference } from '../../migrations/progress.js';
 
 export default class MigrationsList extends BaseCommand {
     static summary = 'List local migration image chains';
@@ -21,17 +21,42 @@ export default class MigrationsList extends BaseCommand {
         }
         console.log(formatTable(
             ['Chain', 'Status', 'Progress', 'Last success', 'Next migration', 'Updated', 'Next command'],
-            chains.map(chain => formatChainRow(chain, catalog)),
+            formatChainRows(chains, catalog),
             { title: 'Migration image chains' },
         ));
     }
 }
 
-function formatChainRow(chain: MigrationImageOverview, catalog: MigrationCatalogSnapshot): string[] {
+function formatChainRows(chains: MigrationImageOverview[], catalog: MigrationCatalogSnapshot): string[][] {
+    const byParent = new Map<string, MigrationImageOverview[]>();
+    const byId = new Map(chains.map(chain => [chain.chainId, chain]));
+    const roots: MigrationImageOverview[] = [];
+    for (const chain of chains) {
+        if (chain.parentChainId && byId.has(chain.parentChainId)) {
+            byParent.set(chain.parentChainId, [...(byParent.get(chain.parentChainId) ?? []), chain]);
+            continue;
+        }
+        roots.push(chain);
+    }
+
+    const rows: string[][] = [];
+    const visit = (chain: MigrationImageOverview, prefix: string) => {
+        rows.push(formatChainRow(chain, catalog, prefix));
+        for (const child of byParent.get(chain.chainId) ?? []) {
+            visit(child, '└─ ');
+        }
+    };
+    for (const root of roots) {
+        visit(root, '');
+    }
+    return rows;
+}
+
+function formatChainRow(chain: MigrationImageOverview, catalog: MigrationCatalogSnapshot, prefix: string): string[] {
     const progress = createChainProgress(chain, catalog);
     const latest = progress.latest;
     return [
-        formatChainDisplay(chain),
+        formatTreeChainDisplay(chain, prefix),
         formatStatusColor(chain.status),
         formatMigrationProgress(progress.completed, progress.total),
         migrationLabel(progress.lastSuccess, catalog),
@@ -39,6 +64,12 @@ function formatChainRow(chain: MigrationImageOverview, catalog: MigrationCatalog
         formatRelativeTime(latest?.labels['be.stamhoofd.migrations.finished-at'] ?? latest?.createdAt),
         nextStep(chain),
     ];
+}
+
+function formatTreeChainDisplay(chain: MigrationImageOverview, prefix: string): string {
+    const display = chainDisplayName(chain);
+    const secondaryPrefix = prefix ? '   ' : '';
+    return `${prefix}${display.primary}\n${secondaryPrefix}${display.secondary}`;
 }
 
 function migrationLabel(image: ImageSummary | undefined, catalog: MigrationCatalogSnapshot): string {

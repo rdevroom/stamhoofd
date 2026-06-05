@@ -3,6 +3,10 @@ import { runMigrationChain } from '@stamhoofd/migrations-manager';
 import MigrationsApply from './apply.js';
 
 vi.mock('@stamhoofd/migrations-manager', () => ({
+    createCliContainerRuntime: vi.fn(async () => ({ command: 'docker' })),
+    createMigrationCatalog: vi.fn(async () => ({ entries: [] })),
+    detectStaleMigrationOutputs: vi.fn(async () => []),
+    listMigrationImages: vi.fn(async () => []),
     runMigrationChain: vi.fn(async () => ({ chainId: 'chain-1', results: [] })),
 }));
 
@@ -45,6 +49,7 @@ describe('MigrationsApply command', () => {
             mysqlImage: 'mysql:8.4',
             verbose: true,
             env: { DB_DATABASE: 'stamhoofd-development' },
+            onProgress: expect.any(Function),
         }));
     });
 

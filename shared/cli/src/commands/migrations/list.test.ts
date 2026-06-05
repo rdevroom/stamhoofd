@@ -3,6 +3,7 @@ import { listMigrationImages } from '@stamhoofd/migrations-manager';
 import MigrationsList from './list.js';
 
 vi.mock('@stamhoofd/migrations-manager', () => ({
+    createMigrationCatalog: vi.fn(async () => ({ entries: [] })),
     listMigrationImages: vi.fn(async () => []),
 }));
 
@@ -27,7 +28,24 @@ describe('MigrationsList command', () => {
     it('prints chain context in a table', async () => {
         vi.mocked(listMigrationImages).mockResolvedValueOnce([
             {
+                chainId: 'parent-chain',
+                status: 'base',
+                images: [
+                    image('parent-base-id', 'stamhoofd-migrations/dev', 'base', {
+                        'be.stamhoofd.migrations.role': 'base',
+                        'be.stamhoofd.migrations.status': 'base',
+                        'be.stamhoofd.migrations.database': 'stamhoofd-development',
+                    }),
+                ],
+                base: image('parent-base-id', 'stamhoofd-migrations/dev', 'base', {
+                    'be.stamhoofd.migrations.role': 'base',
+                    'be.stamhoofd.migrations.status': 'base',
+                    'be.stamhoofd.migrations.database': 'stamhoofd-development',
+                }),
+            },
+            {
                 chainId: 'chain-1',
+                parentChainId: 'parent-chain',
                 status: 'failed',
                 images: [
                     image('base-id', 'stamhoofd-migrations/dev', 'base', {
@@ -76,10 +94,9 @@ describe('MigrationsList command', () => {
         const output = messages.join('\n');
         expect(output).toContain('Migration image chains');
         expect(output).toContain('chain-1');
-        expect(output).toContain('stamhoofd-development');
-        expect(output).toContain('failed');
+        expect(output).toContain('Failed');
         expect(output).toContain('0001-create.js');
-        expect(output).toContain('0002-fail.js');
+        expect(output).toContain('0002-fail');
         expect(output).toContain('parent-chain');
     });
 });

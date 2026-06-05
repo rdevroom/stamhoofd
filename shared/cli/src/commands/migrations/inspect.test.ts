@@ -3,7 +3,9 @@ import { inspectMigrationImage } from '@stamhoofd/migrations-manager';
 import MigrationsInspect from './inspect.js';
 
 vi.mock('@stamhoofd/migrations-manager', () => ({
+    createMigrationCatalog: vi.fn(async () => ({ entries: [] })),
     inspectMigrationImage: vi.fn(async () => details()),
+    listMigrationImages: vi.fn(async () => []),
 }));
 
 describe('MigrationsInspect command', () => {

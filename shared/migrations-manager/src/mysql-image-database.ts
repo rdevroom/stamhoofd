@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import type { ContainerRuntime, MigrationImageManifest } from './types.js';
+import type { ContainerRuntime, MigrationImageManifest, RunResult } from './types.js';
 
 const mysqlUser = 'root';
 const mysqlPassword = 'root';
@@ -50,6 +50,14 @@ export class MysqlImageDatabase {
         await this.runtime.exec(container, ['sh', '-lc', `mysql -h${mysqlHost} -u${mysqlUser} -p${mysqlPassword} --max_allowed_packet=1G ${shellQuote(database)} < /stamhoofd/import.dump`]);
     }
 
+    async listExecutedMigrations(container: string, database: string): Promise<string[]> {
+        const result = await this.execMysql(container, ['-N', '-B', '-e', `SELECT \`file\` FROM \`${database}\`.\`migrations\` ORDER BY \`executedOn\`;`], { allowFailure: true });
+        if (result.status !== 0) {
+            return [];
+        }
+        return result.stdout.split('\n').map(line => line.trim()).filter(Boolean);
+    }
+
     async writeManifest(container: string, manifest: MigrationImageManifest, logs: Record<string, string> = {}): Promise<void> {
         const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'stamhoofd-migrations-'));
         try {
@@ -81,8 +89,8 @@ export class MysqlImageDatabase {
         throw new Error('MySQL did not become ready in time.');
     }
 
-    private async execMysql(container: string, args: string[]): Promise<void> {
-        await this.runtime.exec(container, ['mysql', `-h${mysqlHost}`, `-u${mysqlUser}`, `-p${mysqlPassword}`, ...args]);
+    private async execMysql(container: string, args: string[], options: { allowFailure?: boolean } = {}): Promise<RunResult> {
+        return await this.runtime.exec(container, ['mysql', `-h${mysqlHost}`, `-u${mysqlUser}`, `-p${mysqlPassword}`, ...args], options);
     }
 }
 

@@ -3,12 +3,14 @@ import { createBaseImage } from '@stamhoofd/migrations-manager';
 import MigrationsCreateBase from './create-base.js';
 
 vi.mock('@stamhoofd/migrations-manager', () => ({
+    createCliContainerRuntime: vi.fn(async () => ({ command: 'docker' })),
     createBaseImage: vi.fn(async () => ({
         chainId: 'chain-1',
         image: 'stamhoofd-migrations/dev:base',
         imageId: 'image-id',
         manifest: {},
     })),
+    listMigrationImages: vi.fn(async () => []),
 }));
 
 describe('MigrationsCreateBase command', () => {
@@ -27,16 +29,20 @@ describe('MigrationsCreateBase command', () => {
                 'mysql-image': 'mysql:8.4',
             },
         }));
+        (command as any).createContext = vi.fn(async () => ({ rootDir: '/repo', verbose: true }));
 
         await command.run();
 
-        expect(createBaseImage).toHaveBeenCalledWith({
+        expect(createBaseImage).toHaveBeenCalledWith(expect.objectContaining({
+            rootDir: '/repo',
             dump: '/tmp/database.dump',
             database: 'stamhoofd-development',
             tag: 'stamhoofd-migrations/dev:base',
+            chainId: 'stamhoofd-migrations/dev:base',
             mysqlImage: 'mysql:8.4',
             verbose: true,
-        });
+            runtime: expect.any(Object),
+        }));
     });
 
     it('suggests a new tag when the base image already exists', async () => {
@@ -51,6 +57,7 @@ describe('MigrationsCreateBase command', () => {
                 'mysql-image': 'mysql:8.4',
             },
         }));
+        (command as any).createContext = vi.fn(async () => ({ rootDir: '/repo', verbose: false }));
 
         await expect(command.run()).rejects.toThrow('Choose a different --tag');
     });

@@ -44,6 +44,7 @@ export type RunMigrationChainOptions = {
     runtime?: ContainerRuntime;
     chainId?: string;
     catalog?: MigrationCatalogSnapshot;
+    onProgress?: (event: MigrationProgressEvent) => void;
 };
 
 export type BaseImageOptions = {
@@ -104,8 +105,18 @@ export type MigrationImageManifest = {
     runtime?: string;
     mysqlImage?: string;
     previousChainId?: string;
+    baseMigrationCount?: number;
+    baseMigrationTotal?: number;
+    baseLastMigration?: string;
+    baseLastMigrationIndex?: number;
     timings?: MigrationTimings;
 };
+
+export type MigrationProgressEvent =
+    | { type: 'start'; chainId: string; total: number }
+    | { type: 'migration:start'; chainId: string; migration: MigrationCatalogEntry; completed: number; total: number }
+    | { type: 'migration:finish'; chainId: string; result: MigrationExecutionResult; completed: number; total: number }
+    | { type: 'done'; chainId: string; completed: number; total: number };
 
 export type MigrationTimingPhase = {
     name: string;
@@ -141,6 +152,7 @@ export type MigrationImageOverview = {
     base?: ImageSummary;
     latestSuccess?: ImageSummary;
     failed?: ImageSummary;
+    parentChainId?: string;
     status: 'base' | 'success' | 'failed' | 'unknown';
 };
 
