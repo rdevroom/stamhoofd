@@ -103,6 +103,21 @@ export type MigrationImageManifest = {
     runtime?: string;
     mysqlImage?: string;
     previousChainId?: string;
+    timings?: MigrationTimings;
+};
+
+export type MigrationTimingPhase = {
+    name: string;
+    startedAt: string;
+    finishedAt: string;
+    durationMs: number;
+    status: 'success' | 'failed' | 'skipped';
+    data?: Record<string, string | number | boolean | null>;
+};
+
+export type MigrationTimings = {
+    totalMs: number;
+    phases: MigrationTimingPhase[];
 };
 
 export type ImageSummary = {
