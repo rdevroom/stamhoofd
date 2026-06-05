@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { diffMigrationData, diffMigrationSchema, inspectMigrationImage, listMigrationImages } from '@stamhoofd/migrations-manager';
+import { createMigrationCatalog, diffMigrationData, diffMigrationSchema, inspectMigrationImage, listMigrationImages } from '@stamhoofd/migrations-manager';
 import type { ImageSummary, MigrationDiffResult } from '@stamhoofd/migrations-manager';
 import { Flags } from '@oclif/core';
 import { BaseCommand } from '../../base-command.js';
@@ -30,8 +30,9 @@ export default class MigrationsDiff extends BaseCommand {
         const { flags } = await this.parse(MigrationsDiff);
         const context = await this.createContext(flags);
         const cache = await readMigrationChoiceCache(context.rootDir);
+        const catalog = await createMigrationCatalog(context.rootDir);
         const chains = (!flags.from || !flags.to) ? await listMigrationImages() : [];
-        const selected = (!flags.from || !flags.to) ? await selectDiffImagesFromChain(chains, { lastChainId: cache.migrations.lastChainId }) : undefined;
+        const selected = (!flags.from || !flags.to) ? await selectDiffImagesFromChain(chains, { lastChainId: cache.migrations.lastChainId, catalog }) : undefined;
         const from = flags.from ?? imageReference(selected!.from);
         const to = flags.to ?? imageReference(selected!.to);
         if (from === to) {
@@ -116,7 +117,7 @@ function openDiff(result: MigrationDiffResult): void {
     }
     console.log('\nOpening diff viewer:');
     console.log(`  ${[command.command, ...command.args].join(' ')}`);
-    const opened = spawnSync(command.command, command.args, { stdio: 'inherit' });
+    const opened = spawnSync(command.command, command.args, { stdio: 'inherit', env: { ...process.env, LESS: process.env.LESS ?? 'FRX' } });
     if (opened.error || (typeof opened.status === 'number' && opened.status !== 0)) {
         console.log('\nDiff viewer failed. Open manually:');
         console.log(`  less ${result.outputPath}`);
