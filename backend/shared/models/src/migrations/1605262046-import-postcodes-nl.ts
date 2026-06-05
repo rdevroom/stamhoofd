@@ -22,8 +22,8 @@ async function getProvince(name: string, provinces: Province[]): Promise<Provinc
     return province;
 }
 
-async function getCity(name: string, provinceId: string, cities: City[]): Promise<City> {
-    const p = cities.find(p => StringCompare.typoCount(p.name, name) == 0 && p.country == Country.Netherlands);
+async function getCity(name: string, provinceId: string, citiesByName: Map<string, City>): Promise<City> {
+    const p = citiesByName.get(normalizeCityName(name));
     if (p) {
         return p;
     }
@@ -33,7 +33,7 @@ async function getCity(name: string, provinceId: string, cities: City[]): Promis
     city.provinceId = provinceId;
     await city.save();
 
-    cities.push(city);
+    citiesByName.set(normalizeCityName(city.name), city);
     return city;
 }
 
@@ -64,7 +64,7 @@ export default new Migration(async () => {
             input: fs.createReadStream(p.path, { encoding: 'utf-8' }),
         });
 
-        const cities: City[] = [];
+        const citiesByName = new Map<string, City>();
 
         for await (const line of lineReader) {
             const splitted = line.split('\t');
@@ -77,8 +77,8 @@ export default new Migration(async () => {
             const plaats = splitted[2].trim();
 
             // Check plaats and gemeente
-            const city = await getCity(plaats, province.id, cities);
-            const city2 = await getCity(gemeente, province.id, cities); // might be the same as city
+            const city = await getCity(plaats, province.id, citiesByName);
+            const city2 = await getCity(gemeente, province.id, citiesByName); // might be the same as city
             if (city2.id !== city.id && city.parentCityId === null) {
                 city.parentCityId = city2.id;
                 await city.save();
@@ -93,3 +93,7 @@ export default new Migration(async () => {
         }
     }
 });
+
+function normalizeCityName(name: string): string {
+    return name.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/, ' ').trim();
+}

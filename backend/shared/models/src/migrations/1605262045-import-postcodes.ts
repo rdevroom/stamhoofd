@@ -54,13 +54,13 @@ export default new Migration(async () => {
     // Loop all gemeenten
     const provinces = await Province.all();
     const gemeenten = await Gemeente.all();
-    const cities: City[] = [];
+    const citiesByNameAndProvince = new Map<string, City>();
 
     for (const gemeente of gemeenten) {
         const province = await getProvince(gemeente.provincie, provinces);
 
         // Some cities have the same name
-        const found = cities.find(c => c.name.trim() == gemeente.gemeente.trim() && c.provinceId == province.id);
+        const found = citiesByNameAndProvince.get(cityKey(gemeente.gemeente, province.id));
 
         if (!found) {
             // Create the city
@@ -79,7 +79,7 @@ export default new Migration(async () => {
             await postalCode.save();
 
             gemeente.city = city;
-            cities.push(city);
+            citiesByNameAndProvince.set(cityKey(city.name, city.provinceId), city);
         }
         else {
             gemeente.city = found;
@@ -98,7 +98,7 @@ export default new Migration(async () => {
             continue;
         }
 
-        const hoofd = cities.find(c => c.name.trim() == gemeente.hoofdgemeente.trim() && c.provinceId == gemeente.city.provinceId);
+        const hoofd = citiesByNameAndProvince.get(cityKey(gemeente.hoofdgemeente, gemeente.city.provinceId));
         if (!hoofd) {
             // Create the city
             const city = new City();
@@ -109,7 +109,7 @@ export default new Migration(async () => {
             city.provinceId = province.id;
             await city.save();
 
-            cities.push(city);
+            citiesByNameAndProvince.set(cityKey(city.name, city.provinceId), city);
             // do not create a postal code here, these don't have one
 
             // console.log('Assigning ' + gemeente.gemeente + ' to ' + city.name);
@@ -123,3 +123,7 @@ export default new Migration(async () => {
         }
     }
 });
+
+function cityKey(name: string, provinceId: string): string {
+    return `${name.trim()}\0${provinceId}`;
+}
