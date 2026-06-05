@@ -1,7 +1,7 @@
 import { checkbox, confirm, input, select } from '@inquirer/prompts';
 import type { ImageSummary, MigrationCatalogSnapshot, MigrationImageOverview } from '@stamhoofd/migrations-manager';
 import { formatMigrationLabel, formatMigrationNumber, formatMigrationProgress, formatRelativeTime, formatStatusColor, friendlyMigrationName, padColumns } from './format.js';
-import { createChainProgress, imageReference } from './progress.js';
+import { chainDisplayName, createChainProgress, imageReference } from './progress.js';
 
 export function isInteractive(): boolean {
     return process.stdin.isTTY === true;
@@ -296,10 +296,11 @@ function latestDate(chain: MigrationImageOverview): string {
 
 function chainChoiceLabel(chain: MigrationImageOverview, catalog: MigrationCatalogSnapshot, selectedLast: boolean): string {
     const progress = createChainProgress(chain, catalog);
+    const display = chainDisplayName(chain);
     const next = progress.next ? `${formatMigrationProgress(progress.next.index + 1, progress.total)} ${friendlyMigrationName(progress.next.normalizedFile)}` : '-';
     const last = progress.lastSuccess ? imageChoiceLabel(progress.lastSuccess, catalog) : '-';
     return padColumns([
-        chain.chainId,
+        `${display.primary} ${display.secondary}`,
         formatStatusColor(chain.status),
         `${formatMigrationProgress(progress.completed, progress.total)} migrations`,
         `Last ${last}`,

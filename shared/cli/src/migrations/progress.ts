@@ -1,4 +1,7 @@
 import type { ImageSummary, MigrationCatalogSnapshot, MigrationImageOverview } from '@stamhoofd/migrations-manager';
+import chalk from 'chalk';
+
+export const migrationDatabaseName = 'stamhoofd-migrations';
 
 export type ChainProgress = {
     chain: MigrationImageOverview;
@@ -39,4 +42,30 @@ export function imageReference(image: ImageSummary): string {
         return `${image.repository}:${image.tag}`;
     }
     return image.id;
+}
+
+export function chainDisplayName(chain: MigrationImageOverview): { primary: string; secondary: string } {
+    const repository = bestRepository(chain);
+    if (!repository) {
+        return { primary: chain.chainId, secondary: chalk.dim('no local tag') };
+    }
+    return { primary: shortRepository(repository), secondary: chalk.dim(chain.chainId) };
+}
+
+export function formatChainDisplay(chain: MigrationImageOverview): string {
+    const display = chainDisplayName(chain);
+    return `${display.primary}\n${display.secondary}`;
+}
+
+function bestRepository(chain: MigrationImageOverview): string | undefined {
+    const tagged = chain.images.find(image => image.repository && image.repository !== '<none>' && image.tag && image.tag !== '<none>');
+    return tagged?.repository;
+}
+
+function shortRepository(repository: string): string {
+    const parts = repository.split('/').filter(Boolean);
+    if (parts.length <= 2) {
+        return parts.at(-1) ?? repository;
+    }
+    return parts.slice(2).join('/');
 }

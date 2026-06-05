@@ -6,7 +6,8 @@ import { Flags } from '@oclif/core';
 import { BaseCommand } from '../../base-command.js';
 import { formatTable } from '../../runtime/ux.js';
 import { readMigrationChoiceCache, writeMigrationChoiceCache } from '../../migrations/cache.js';
-import { isInteractive, resolveTextFlag, selectDiffImagesFromChain, selectDiffMode } from '../../migrations/prompts.js';
+import { selectDiffImagesFromChain, selectDiffMode } from '../../migrations/prompts.js';
+import { migrationDatabaseName } from '../../migrations/progress.js';
 
 export default class MigrationsDiff extends BaseCommand {
     static summary = 'Compare two migration images';
@@ -20,7 +21,7 @@ export default class MigrationsDiff extends BaseCommand {
         ...BaseCommand.verboseFlags,
         from: Flags.string({ description: 'Source image tag or id' }),
         to: Flags.string({ description: 'Target image tag or id' }),
-        database: Flags.string({ description: 'Database to compare' }),
+        database: Flags.string({ description: 'Database to compare', hidden: true }),
         schema: Flags.boolean({ description: 'Compare schema only', default: false }),
         data: Flags.boolean({ description: 'Compare row-count data summary', default: false }),
         output: Flags.string({ description: 'Diff output file' }),
@@ -38,7 +39,7 @@ export default class MigrationsDiff extends BaseCommand {
         if (from === to) {
             throw new Error('Cannot compare a migration image against itself. Select a different target image.');
         }
-        const database = flags.database ?? await inferDatabase(from, to, selected?.from, selected?.to) ?? await resolveTextFlag(undefined, 'database', 'Could not infer the database. Which database should be compared?', cache.migrations.database);
+        const database = flags.database ?? await inferDatabase(from, to, selected?.from, selected?.to);
         const modes = await resolveModes(flags.schema, flags.data);
         await writeMigrationChoiceCache(context.rootDir, { database });
 
@@ -67,16 +68,13 @@ async function resolveModes(schema: boolean, data: boolean): Promise<Array<'sche
     return mode === 'both' ? ['schema', 'data'] : [mode];
 }
 
-async function inferDatabase(from: string, to: string, fromImage?: ImageSummary, toImage?: ImageSummary): Promise<string | undefined> {
+async function inferDatabase(from: string, to: string, fromImage?: ImageSummary, toImage?: ImageSummary): Promise<string> {
     const fromDatabase = databaseFromImage(fromImage) ?? await databaseFromInspect(from);
     const toDatabase = databaseFromImage(toImage) ?? await databaseFromInspect(to);
     if (fromDatabase && toDatabase && fromDatabase !== toDatabase) {
-        if (!isInteractive()) {
-            throw new Error(`Selected images use different databases (${fromDatabase} and ${toDatabase}). Pass --database explicitly.`);
-        }
-        return await resolveTextFlag(undefined, 'database', `Selected images use different databases (${fromDatabase} and ${toDatabase}). Which database should be compared?`, fromDatabase);
+        console.log(`Selected images use different stored database names. Using ${fromDatabase}.`);
     }
-    return fromDatabase ?? toDatabase;
+    return fromDatabase ?? toDatabase ?? migrationDatabaseName;
 }
 
 function databaseFromImage(image: ImageSummary | undefined): string | undefined {

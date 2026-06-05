@@ -17,7 +17,7 @@ You only need a few container concepts to understand this tool.
 | Image | A saved snapshot that can be used to start a container. Example: `stamhoofd-migrations/dev:base`. |
 | Container | A running MySQL process created from an image. The manager starts temporary containers while applying migrations. |
 | Commit | Saving a container's current filesystem as a new image. This is how every migration becomes a new image layer. |
-| Tag | A human-readable image name. Example: `stamhoofd-migrations/dev:0001-create-tables`. |
+| Tag | A Docker/Podman alias for one image. Examples: `mysql:8.4`, `localhost/stamhoofd-migrations/manual:base`, or `localhost/stamhoofd-migrations/manual:latest`. |
 | Label | Small metadata attached to an image. The manager uses labels to find and group migration chains. |
 | Volume | External storage mounted into a container. The manager avoids MySQL's default volume path so committed images actually contain database files. |
 
@@ -51,9 +51,14 @@ yarn stam migrations rerun --chain <chain-id>
 yarn stam migrations cleanup --chain <chain-id> --dry-run
 yarn stam migrations diff --from <image> --to <image> --database stamhoofd-development
 yarn stam migrations diff --data --from <image> --to <image> --database stamhoofd-development
+yarn stam migrations export --image <image> --all --output .stamhoofd/migrations-exports/export.sql
 ```
 
 Most commands are interactive in a terminal. When required flags are missing, the CLI asks for values and remembers non-sensitive choices per workspace in the user cache directory. In non-interactive scripts, required flags must be passed explicitly.
+
+The migration database inside new images is always named `stamhoofd-migrations`. Older images keep their stored manifest database name, and image-based commands use that stored value.
+
+Tags and chains are related but not the same. A tag points to one Docker/Podman image. A chain id is Stamhoofd metadata that groups the base image and later migration images from one run. Tags can be deleted independently from images; the chain id remains available as long as labelled images still exist locally.
 
 ## Step 1: Create A Base Image
 
@@ -372,3 +377,15 @@ yarn stam migrations diff --data --from <image> --to <image> --database stamhoof
 ```
 
 Diff artifacts are saved in `.stamhoofd/migrations-diffs/` unless `--output` is provided.
+
+## Export
+
+Use `export` to dump SQL from a migration image:
+
+```bash
+yarn stam migrations export
+yarn stam migrations export --image <image> --all --output .stamhoofd/migrations-exports/export.sql
+yarn stam migrations export --image <image> --table members --output members.sql
+```
+
+In a terminal, the command asks for a chain, image, whether to export all tables or selected tables, and where to save the SQL file.

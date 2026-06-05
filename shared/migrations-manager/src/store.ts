@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import type { CleanupOptions, CleanupPlan, CleanupResult, ContainerRuntime, ImageSummary, MigrationDiffOptions, MigrationDiffResult, MigrationImageDetails, MigrationImageManifest, MigrationImageOverview, RerunStart, ResolveRerunStartOptions } from './types.js';
+import type { CleanupOptions, CleanupPlan, CleanupResult, ContainerRuntime, ImageSummary, MigrationDiffOptions, MigrationDiffResult, MigrationImageDetails, MigrationImageManifest, MigrationImageOverview, MigrationSqlExportOptions, MigrationSqlExportResult, RerunStart, ResolveRerunStartOptions } from './types.js';
 import { createCliContainerRuntime } from './runtime.js';
 import { migrationLabel } from './labels.js';
 
@@ -168,6 +168,42 @@ export async function diffMigrationData(options: MigrationDiffOptions): Promise<
     } finally {
         await runtime.remove(fromContainer);
         await runtime.remove(toContainer);
+    }
+}
+
+export async function resolveMigrationImageDatabase(options: { image: string; runtime?: ContainerRuntime }): Promise<string | undefined> {
+    const details = await inspectMigrationImage(options);
+    return details.manifest?.database ?? details.metadata.labels['be.stamhoofd.migrations.database'];
+}
+
+export async function listMigrationImageTables(options: { image: string; database?: string; runtime?: ContainerRuntime }): Promise<string[]> {
+    const runtime = options.runtime ?? await createCliContainerRuntime();
+    const database = options.database ?? await resolveMigrationImageDatabase({ image: options.image, runtime }) ?? 'stamhoofd-migrations';
+    const container = `stamhoofd-migrations-export-list-${Date.now()}`;
+    try {
+        await runtime.run(['run', '-d', '--name', container, '-e', 'MYSQL_ROOT_PASSWORD=root', options.image, '--datadir=/stamhoofd-mysql-data', '--mysql-native-password=ON']);
+        await waitForMysql(runtime, container);
+        const result = await runtime.exec(container, ['mysql', '-h127.0.0.1', '-uroot', '-proot', '-N', '-e', `SHOW TABLES FROM \`${database}\`;`]);
+        return result.stdout.split('\n').filter(Boolean);
+    } finally {
+        await runtime.remove(container);
+    }
+}
+
+export async function exportMigrationImageSql(options: MigrationSqlExportOptions): Promise<MigrationSqlExportResult> {
+    const runtime = options.runtime ?? await createCliContainerRuntime();
+    const database = options.database ?? await resolveMigrationImageDatabase({ image: options.image, runtime }) ?? 'stamhoofd-migrations';
+    const tables = options.tables && options.tables.length > 0 ? options.tables : await listMigrationImageTables({ image: options.image, database, runtime });
+    const container = `stamhoofd-migrations-export-${Date.now()}`;
+    try {
+        await runtime.run(['run', '-d', '--name', container, '-e', 'MYSQL_ROOT_PASSWORD=root', options.image, '--datadir=/stamhoofd-mysql-data', '--mysql-native-password=ON']);
+        await waitForMysql(runtime, container);
+        const dump = await runtime.exec(container, ['mysqldump', '-h127.0.0.1', '-uroot', '-proot', '--skip-comments', database, ...tables]);
+        await fs.mkdir(path.dirname(options.outputPath), { recursive: true });
+        await fs.writeFile(options.outputPath, dump.stdout);
+        return { image: options.image, database, tables, outputPath: options.outputPath };
+    } finally {
+        await runtime.remove(container);
     }
 }
 

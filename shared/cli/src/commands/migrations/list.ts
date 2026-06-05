@@ -3,8 +3,8 @@ import type { ImageSummary, MigrationCatalogSnapshot, MigrationImageOverview } f
 import chalk from 'chalk';
 import { BaseCommand } from '../../base-command.js';
 import { formatTable } from '../../runtime/ux.js';
-import { formatMigrationLabel, formatMigrationProgress, formatRelativeTime, formatStatusColor, friendlyMigrationName } from '../../migrations/format.js';
-import { createChainProgress, imageReference } from '../../migrations/progress.js';
+import { formatMigrationLabel, formatMigrationNumber, formatMigrationProgress, formatRelativeTime, formatStatusColor, friendlyMigrationName } from '../../migrations/format.js';
+import { createChainProgress, formatChainDisplay, imageReference } from '../../migrations/progress.js';
 
 export default class MigrationsList extends BaseCommand {
     static summary = 'List local migration image chains';
@@ -31,11 +31,11 @@ function formatChainRow(chain: MigrationImageOverview, catalog: MigrationCatalog
     const progress = createChainProgress(chain, catalog);
     const latest = progress.latest;
     return [
-        chain.chainId,
+        formatChainDisplay(chain),
         formatStatusColor(chain.status),
-        `${formatMigrationProgress(progress.completed, progress.total)} migrations`,
+        formatMigrationProgress(progress.completed, progress.total),
         migrationLabel(progress.lastSuccess, catalog),
-        progress.next ? `${formatMigrationProgress(progress.next.index + 1, progress.total)} ${friendlyMigrationName(progress.next.normalizedFile)}\n${chalk.dim(progress.next.normalizedFile)}` : '-',
+        progress.next ? `${formatMigrationNumber(progress.next.index)} ${friendlyMigrationName(progress.next.normalizedFile)}\n${chalk.dim(progress.next.normalizedFile)}` : '-',
         formatRelativeTime(latest?.labels['be.stamhoofd.migrations.finished-at'] ?? latest?.createdAt),
         nextStep(chain),
     ];
@@ -46,7 +46,7 @@ function migrationLabel(image: ImageSummary | undefined, catalog: MigrationCatal
         return '-';
     }
     const index = image.labels['be.stamhoofd.migrations.migration-index'];
-    const prefix = index === undefined ? '' : `${formatMigrationProgress(Number(index) + 1, catalog.entries.length)} `;
+    const prefix = index === undefined ? '' : `${formatMigrationNumber(Number(index))} `;
     return `${prefix}${formatMigrationLabel(image.labels['be.stamhoofd.migrations.migration'] ?? 'base')}`;
 }
 
@@ -54,19 +54,19 @@ function nextStep(chain: MigrationImageOverview): string {
     if (chain.status === 'failed') {
         const failed = chain.failed;
         if (!failed) {
-            return `yarn stam migrations inspect --chain ${chalk.underline(chain.chainId)}`;
+            return `inspect --chain ${chalk.underline(chain.chainId)}`;
         }
-        return `yarn stam migrations inspect --image ${chalk.underline(imageReference(failed))} --logs\nyarn stam migrations rerun --chain ${chalk.underline(chain.chainId)}`;
+        return `inspect --image ${chalk.underline(imageReference(failed))} --logs\nrerun --chain ${chalk.underline(chain.chainId)}`;
     }
     if (chain.status === 'success') {
         const latest = chain.latestSuccess;
         if (!latest) {
-            return `yarn stam migrations inspect --chain ${chalk.underline(chain.chainId)}`;
+            return `inspect --chain ${chalk.underline(chain.chainId)}`;
         }
-        return `yarn stam migrations diff --from ${chalk.underline(imageReference(latest))}\nyarn stam migrations inspect --image ${chalk.underline(imageReference(latest))}`;
+        return `diff --from ${chalk.underline(imageReference(latest))}\ninspect --image ${chalk.underline(imageReference(latest))}`;
     }
     if (chain.status === 'base') {
-        return chain.base ? `yarn stam migrations apply --base ${chalk.underline(imageReference(chain.base))}` : `yarn stam migrations inspect --chain ${chalk.underline(chain.chainId)}`;
+        return chain.base ? `apply --base ${chalk.underline(imageReference(chain.base))}` : `inspect --chain ${chalk.underline(chain.chainId)}`;
     }
-    return `yarn stam migrations inspect --chain ${chalk.underline(chain.chainId)}`;
+    return `inspect --chain ${chalk.underline(chain.chainId)}`;
 }
