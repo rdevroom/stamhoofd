@@ -237,7 +237,9 @@ function formatLogs(logs: string, maxLines: number): string {
 }
 
 function formatLabels(details: MigrationImageDetails): string {
-    const labels = Object.entries(details.metadata.labels).sort(([a], [b]) => a.localeCompare(b));
+    const labels = Object.entries(details.metadata.labels)
+        .map(([key, value]) => [key, String(value)])
+        .sort(([a], [b]) => a.localeCompare(b));
     if (labels.length === 0) {
         return 'Labels: none';
     }

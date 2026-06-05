@@ -234,7 +234,7 @@ async function selectMigrationImage(chain: MigrationImageOverview, message: stri
             disabled: excluded ? 'Already selected as the starting image' : undefined,
         };
     });
-    const selected = await select({ message, choices });
+    const selected = await select<string>({ message, choices });
     return requireImage(chain.images, selected);
 }
 
