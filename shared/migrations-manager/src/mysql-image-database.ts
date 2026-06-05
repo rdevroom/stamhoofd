@@ -58,11 +58,8 @@ export class MysqlImageDatabase {
             for (const [name, log] of Object.entries(logs)) {
                 await fs.writeFile(path.join(tmp, 'logs', name), log);
             }
-            await this.runtime.exec(container, ['mkdir', '-p', '/stamhoofd-migrations/logs']);
-            await this.runtime.copyToContainer(path.join(tmp, 'manifest.json'), container, '/stamhoofd-migrations/manifest.json');
-            for (const name of Object.keys(logs)) {
-                await this.runtime.copyToContainer(path.join(tmp, 'logs', name), container, `/stamhoofd-migrations/logs/${name}`);
-            }
+            await this.runtime.exec(container, ['mkdir', '-p', '/stamhoofd-migrations']);
+            await this.runtime.copyToContainer(`${tmp}/.`, container, '/stamhoofd-migrations');
         } finally {
             await fs.rm(tmp, { recursive: true, force: true });
         }
