@@ -185,6 +185,8 @@ export type MigrationDiffResult = {
     from: string;
     to: string;
     outputPath?: string;
+    beforePath?: string;
+    afterPath?: string;
     preview: string;
 };
 

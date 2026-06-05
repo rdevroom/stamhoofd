@@ -217,7 +217,7 @@ export function table(headers: string[], rows: string[][], options: { title?: st
 }
 
 export function formatTable(headers: string[], rows: string[][], options: { title?: string } = {}): string {
-    const widths = constrainTableWidths(headers.map((header, index) => Math.max(visibleLength(header), ...rows.map(row => visibleLength(row[index] ?? '')))));
+    const widths = constrainTableWidths(headers.map((header, index) => Math.max(visibleLength(header), ...rows.flatMap(row => cellLines(row[index] ?? '').map(visibleLength)))));
     const formattedHeaders = headers.map((header, index) => chalk.bold(truncateVisible(header, widths[index])));
     const lines = [
         formatTableBorder(widths, TableBorderPosition.Top),
@@ -225,7 +225,9 @@ export function formatTable(headers: string[], rows: string[][], options: { titl
         formatTableBorder(widths, TableBorderPosition.Middle),
     ];
     for (const row of rows) {
-        lines.push(formatTableRow(row.map((cell, index) => truncateVisible(cell, widths[index])), widths));
+        for (const line of formatTableRowLines(row, widths)) {
+            lines.push(line);
+        }
     }
     lines.push(formatTableBorder(widths, TableBorderPosition.Bottom));
 
@@ -247,6 +249,16 @@ function normalizeCell(cell: TableCellInput): Cell {
 
 function formatTableRow(row: string[], widths: number[]): string {
     return `│ ${row.map((cell, index) => cell.padEnd(widths[index] + ansiLength(cell))).join(' │ ')} │`;
+}
+
+function formatTableRowLines(row: string[], widths: number[]): string[] {
+    const splitCells = widths.map((_, index) => cellLines(row[index] ?? '').map(line => truncateVisible(line, widths[index])));
+    const height = Math.max(...splitCells.map(lines => lines.length));
+    return Array.from({ length: height }, (_, lineIndex) => formatTableRow(splitCells.map(lines => lines[lineIndex] ?? ''), widths));
+}
+
+function cellLines(cell: string): string[] {
+    return cell.split('\n');
 }
 
 function constrainTableWidths(widths: number[]): number[] {
