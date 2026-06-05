@@ -5,12 +5,14 @@ import { compareCatalogs, createMigrationCatalog, selectMigrations, sha256File }
 import { labelsForManifest } from './labels.js';
 import { MysqlImageDatabase } from './mysql-image-database.js';
 import { createCliContainerRuntime, runCommand } from './runtime.js';
+import { MigrationTimer } from './timings.js';
 import type { BaseImageOptions, BaseImageResult, MigrationChainResult, MigrationExecutionResult, MigrationImageManifest, RunMigrationChainOptions, StaleMigrationOutput } from './types.js';
 
 const defaultMysqlImage = 'docker.io/library/mysql:8.4';
 
 export async function createBaseImage(options: BaseImageOptions): Promise<BaseImageResult> {
     const runtime = options.runtime ?? await createCliContainerRuntime();
+    const timer = new MigrationTimer();
     const mysqlImage = options.mysqlImage ?? defaultMysqlImage;
     const chainId = options.chainId ?? createChainId();
     const database = new MysqlImageDatabase(runtime, options.verbose ?? false);
@@ -18,14 +20,17 @@ export async function createBaseImage(options: BaseImageOptions): Promise<BaseIm
     const dumpSha256 = dump ? await sha256File(dump) : undefined;
     const container = `stamhoofd-migrations-base-${chainId}`;
     const startedAt = new Date().toISOString();
-    await assertImageMissing(runtime, options.tag);
+    await timer.measure('assert-image-missing', { image: options.tag }, () => assertImageMissing(runtime, options.tag));
 
     try {
-        await database.start(mysqlImage, container);
-        await database.createDatabase(container, options.database);
+        await timer.measure('start-container', { image: mysqlImage, container, publishPort: false }, () => database.start(mysqlImage, container));
+        await timer.measure('create-database', { container, database: options.database }, () => database.createDatabase(container, options.database));
         if (dump) {
-            await database.importDump(container, dump, options.database);
+            await timer.measure('import-dump', { container, database: options.database, dump }, () => database.importDump(container, dump, options.database));
+        } else {
+            timer.skipped('import-dump', { container, database: options.database });
         }
+        await timer.measure('prepare-metadata', { container }, () => Promise.resolve());
         const finishedAt = new Date().toISOString();
         const manifest: MigrationImageManifest = {
             version: 1,
@@ -40,9 +45,10 @@ export async function createBaseImage(options: BaseImageOptions): Promise<BaseIm
             finishedAt,
             runtime: runtime.command,
             mysqlImage,
+            timings: timer.snapshot(),
         };
         await database.writeManifest(container, manifest);
-        await database.stopForCommit(container);
+        await timer.measure('stop-mysql', { container }, () => database.stopForCommit(container));
         const imageId = await runtime.commit(container, options.tag, { labels: labelsForManifest(manifest) });
         return { chainId, image: options.tag, imageId, dumpSha256, manifest };
     } finally {
@@ -72,16 +78,17 @@ export async function runMigrationChain(options: RunMigrationChainOptions): Prom
 
     for (const migration of migrations) {
         const tag = `${options.tagPrefix}:${String(migration.index + 1).padStart(4, '0')}-${slug(migration.normalizedFile)}`;
-        await assertImageMissing(runtime, tag);
         const container = `stamhoofd-migrations-${chainId}-${migration.index}`;
         const startedAt = new Date().toISOString();
         let status: 'success' | 'failed' = 'success';
         let log = '';
         let error: string | undefined;
+        const timer = new MigrationTimer();
         try {
-            await database.start(parentImage, container, { publishPort: true });
-            const port = await database.mappedPort(container);
-            const run = await runCommand('node', ['--enable-source-maps', path.join(rootDir, 'backend/app/api/dist/single-migration.js'), '--file', compiledMigrationPath(rootDir, migration), '--name', migration.normalizedFile], {
+            await timer.measure('assert-image-missing', { image: tag }, () => assertImageMissing(runtime, tag));
+            await timer.measure('start-container', { image: parentImage, container, publishPort: true }, () => database.start(parentImage, container, { publishPort: true }));
+            const port = await timer.measure('resolve-mapped-port', { container }, () => database.mappedPort(container));
+            const run = await timer.measure('run-migration', { container, port, migration: migration.normalizedFile }, () => runCommand('node', ['--enable-source-maps', path.join(rootDir, 'backend/app/api/dist/single-migration.js'), '--file', compiledMigrationPath(rootDir, migration), '--name', migration.normalizedFile], {
                 cwd: rootDir,
                 allowFailure: true,
                 env: {
@@ -101,7 +108,7 @@ export async function runMigrationChain(options: RunMigrationChainOptions): Prom
                     STAMHOOFD_ENV: options.env?.STAMHOOFD_ENV ?? process.env.STAMHOOFD_ENV ?? 'stamhoofd',
                 },
                 verbose: options.verbose,
-            });
+            }));
             log = [run.stdout, run.stderr].filter(Boolean).join('\n');
             if (run.status !== 0) {
                 status = 'failed';
@@ -113,6 +120,7 @@ export async function runMigrationChain(options: RunMigrationChainOptions): Prom
             log = [log, error].filter(Boolean).join('\n');
         }
 
+        await timer.measure('prepare-metadata', { container, logBytes: Buffer.byteLength(log) }, () => Promise.resolve());
         const finishedAt = new Date().toISOString();
         const manifest: MigrationImageManifest = {
             version: 1,
@@ -133,9 +141,10 @@ export async function runMigrationChain(options: RunMigrationChainOptions): Prom
             runtime: runtime.command,
             mysqlImage: options.mysqlImage ?? defaultMysqlImage,
             previousChainId: options.previousChainId,
+            timings: timer.snapshot(),
         };
         await database.writeManifest(container, manifest, { [`${migration.normalizedFile}.log`]: log });
-        await database.stopForCommit(container);
+        await timer.measure('stop-mysql', { container }, () => database.stopForCommit(container));
         const imageId = await runtime.commit(container, tag, { labels: labelsForManifest(manifest) });
         await runtime.remove(container);
 
