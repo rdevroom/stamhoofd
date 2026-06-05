@@ -1,0 +1,11 @@
+--- /tmp/stamhoofd-migrations-diff-zWO4gJ/before.schema.sql	2026-06-05 01:02:29.375966069 +0100
++++ /tmp/stamhoofd-migrations-diff-zWO4gJ/after.schema.sql	2026-06-05 01:02:29.375966069 +0100
+@@ -661,7 +661,7 @@
+   PRIMARY KEY (`id`),
+   UNIQUE KEY `id` (`id`),
+   UNIQUE KEY `file` (`file`) USING BTREE
+-) ENGINE=InnoDB AUTO_INCREMENT=237 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
++) ENGINE=InnoDB AUTO_INCREMENT=238 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+ /*!40101 SET character_set_client = @saved_cs_client */;
+ DROP TABLE IF EXISTS `mollie_payments`;
+ /*!40101 SET @saved_cs_client     = @@character_set_client */;
