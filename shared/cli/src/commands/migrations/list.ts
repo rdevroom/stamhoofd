@@ -41,7 +41,7 @@ function formatChainRows(chains: MigrationImageOverview[], catalog: MigrationCat
 
     const rows: string[][] = [];
     const visit = (chain: MigrationImageOverview, prefix: string) => {
-        rows.push(formatChainRow(chain, catalog, prefix));
+        rows.push(formatChainRow(chain, catalog, prefix, prefix ? byId.get(chain.parentChainId ?? '') : undefined));
         for (const child of byParent.get(chain.chainId) ?? []) {
             visit(child, '└─ ');
         }
@@ -52,13 +52,15 @@ function formatChainRows(chains: MigrationImageOverview[], catalog: MigrationCat
     return rows;
 }
 
-function formatChainRow(chain: MigrationImageOverview, catalog: MigrationCatalogSnapshot, prefix: string): string[] {
+function formatChainRow(chain: MigrationImageOverview, catalog: MigrationCatalogSnapshot, prefix: string, parent?: MigrationImageOverview): string[] {
     const progress = createChainProgress(chain, catalog);
     const latest = progress.latest;
+    const parentProgress = parent ? createChainProgress(parent, catalog) : undefined;
+    const delta = parentProgress ? progress.completed - parentProgress.completed : 0;
     return [
         formatTreeChainDisplay(chain, prefix),
         formatStatusColor(chain.status),
-        formatMigrationProgress(progress.completed, progress.total),
+        parentProgress ? `${formatMigrationProgress(progress.completed, progress.total)}\n${chalk.dim(delta >= 0 ? `+${delta}` : `${delta}`)}` : formatMigrationProgress(progress.completed, progress.total),
         migrationLabel(progress.lastSuccess, catalog),
         progress.next ? `${formatMigrationNumber(progress.next.index)} ${friendlyMigrationName(progress.next.normalizedFile)}\n${chalk.dim(progress.next.normalizedFile)}` : '-',
         formatRelativeTime(latest?.labels['be.stamhoofd.migrations.finished-at'] ?? latest?.createdAt),

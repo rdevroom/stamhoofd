@@ -2,6 +2,7 @@ import { createBaseImage, createCliContainerRuntime, listMigrationImages } from 
 import { Flags } from '@oclif/core';
 import { BaseCommand } from '../../base-command.js';
 import { readMigrationChoiceCache, writeMigrationChoiceCache } from '../../migrations/cache.js';
+import { createBaseProgressOutput } from '../../migrations/base-progress.js';
 import { improveImageConflictError } from '../../migrations/errors.js';
 import { resolveOptionalInputFlag, resolveTextFlag } from '../../migrations/prompts.js';
 import { migrationDatabaseName } from '../../migrations/progress.js';
@@ -25,24 +26,26 @@ export default class MigrationsCreateBase extends BaseCommand {
         const chains = await listMigrationImages({ runtime });
         const database = flags.database ?? migrationDatabaseName;
         printExplanation();
-        const tag = await resolveTextFlag(flags.tag, 'tag', 'Which Docker/Podman tag should be created for the base image?', defaultLocalTag());
+        const name = await resolveTextFlag(flags.tag, 'tag', 'Which name should this migration base use?', defaultBaseName());
+        const tag = imageReferenceFromName(name);
         const dump = await resolveOptionalInputFlag(flags.dump, 'Which database dump should be imported? Leave empty to create an empty base image.');
         const mysqlImage = flags['mysql-image'];
-        const defaultChainId = chainIdFromTag(tag);
-        const chainId = defaultChainId && !chains.some(chain => chain.chainId === defaultChainId) ? defaultChainId : undefined;
+        const chainId = !chains.some(chain => chain.chainId === name) ? name : undefined;
+        const progress = createBaseProgressOutput();
         const result = await createBaseImage({
             rootDir: context.rootDir,
             dump,
             database,
             tag,
             chainId,
+            displayName: name,
             mysqlImage,
             verbose: flags.verbose,
             runtime,
-        }).catch(error => improveImageConflictError(error, '--tag'));
+            onProgress: progress.onProgress,
+        }).catch(error => improveImageConflictError(error, '--tag')).finally(() => progress.stop());
         const tagPrefix = tagPrefixFromTag(tag);
         await writeMigrationChoiceCache(context.rootDir, { ...(mysqlImage ? { mysqlImage } : {}), tagPrefix });
-        console.log(`Created base image ${result.image} (${result.imageId})`);
         console.log(`Chain: ${result.chainId}`);
         console.log('The Docker/Podman tag points to this one image. The chain id groups this base and future migration images.');
         if (result.dumpSha256) {
@@ -54,13 +57,6 @@ export default class MigrationsCreateBase extends BaseCommand {
         console.log('\nNext step:');
         console.log(`  yarn stam migrations apply --base ${result.image} --tag-prefix ${tagPrefix}`);
     }
-}
-
-function chainIdFromTag(tag: string): string | undefined {
-    const separator = tag.lastIndexOf(':');
-    const slash = tag.lastIndexOf('/');
-    const tagName = separator > slash ? tag.slice(separator + 1) : tag;
-    return tagName || undefined;
 }
 
 function tagPrefixFromTag(tag: string): string {
@@ -78,7 +74,18 @@ function printExplanation(): void {
     console.log('');
 }
 
-function defaultLocalTag(date = new Date()): string {
+function defaultBaseName(date = new Date()): string {
     const pad = (value: number) => String(value).padStart(2, '0');
-    return `localhost/stamhoofd-migrations/base:${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}_${pad(date.getMinutes())}_${pad(date.getSeconds())}`;
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}_${pad(date.getMinutes())}_${pad(date.getSeconds())}`;
+}
+
+function imageReferenceFromName(name: string): string {
+    if (name.includes('/')) {
+        return name;
+    }
+    return `localhost/stamhoofd-migrations/${imageNameSlug(name)}:base`;
+}
+
+function imageNameSlug(name: string): string {
+    return name.toLowerCase().replace(/[^a-z0-9_.-]+/g, '-').replace(/^-+|-+$/g, '') || 'base';
 }

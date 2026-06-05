@@ -1,5 +1,6 @@
 import type { MigrationProgressEvent } from '@stamhoofd/migrations-manager';
 import chalk from 'chalk';
+import { stripVTControlCharacters } from 'node:util';
 import { createLiveOutput, type LiveOutput, StatusItemKind } from '../runtime/live-output.js';
 import { formatMigrationLabel } from './format.js';
 
@@ -17,7 +18,7 @@ export function createMigrationProgressOutput(): MigrationProgressOutput {
 
     const render = () => {
         output.setStatus([
-            { label: `${progressBar(completed, total)} ${completed}/${total}` },
+            { label: `${progressBar(completed, total, current)} ${completed}/${total}` },
             { label: current, kind: StatusItemKind.Muted },
         ]);
     };
@@ -58,8 +59,10 @@ export function createMigrationProgressOutput(): MigrationProgressOutput {
     };
 }
 
-function progressBar(completed: number, total: number): string {
-    const width = 24;
+function progressBar(completed: number, total: number, current: string): string {
+    const terminalWidth = process.stdout.columns ?? 80;
+    const reserved = stripVTControlCharacters(` ${completed}/${total}  ${current}`).length;
+    const width = Math.max(24, terminalWidth - reserved - 4);
     const ratio = total === 0 ? 1 : Math.max(0, Math.min(1, completed / total));
     const filled = Math.round(width * ratio);
     return `[${chalk.green('='.repeat(filled))}${chalk.dim('-'.repeat(width - filled))}]`;

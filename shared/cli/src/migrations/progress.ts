@@ -47,11 +47,20 @@ export function imageReference(image: ImageSummary): string {
 }
 
 export function chainDisplayName(chain: MigrationImageOverview): { primary: string; secondary: string } {
+    const displayName = bestDisplayName(chain);
+    if (displayName) {
+        return { primary: displayName, secondary: chalk.dim(chain.chainId) };
+    }
     const repository = bestRepository(chain);
     if (!repository) {
         return { primary: chain.chainId, secondary: chalk.dim('no local tag') };
     }
     return { primary: shortRepository(repository), secondary: chalk.dim(chain.chainId) };
+}
+
+function bestDisplayName(chain: MigrationImageOverview): string | undefined {
+    const tagged = chain.images.find(image => image.labels['be.stamhoofd.migrations.display-name']);
+    return tagged?.labels['be.stamhoofd.migrations.display-name'];
 }
 
 export function formatChainDisplay(chain: MigrationImageOverview): string {

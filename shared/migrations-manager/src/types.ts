@@ -56,6 +56,8 @@ export type BaseImageOptions = {
     verbose?: boolean;
     runtime?: ContainerRuntime;
     chainId?: string;
+    displayName?: string;
+    onProgress?: (event: BaseImageProgressEvent) => void;
 };
 
 export type BaseImageResult = {
@@ -91,6 +93,7 @@ export type MigrationImageManifest = {
     status: 'base' | 'success' | 'failed';
     database: string;
     image?: string;
+    displayName?: string;
     parentImage?: string;
     migration?: MigrationCatalogEntry;
     catalog?: MigrationCatalogSnapshot;
@@ -111,6 +114,11 @@ export type MigrationImageManifest = {
     baseLastMigrationIndex?: number;
     timings?: MigrationTimings;
 };
+
+export type BaseImageProgressEvent =
+    | { type: 'phase:start'; phase: string; message: string }
+    | { type: 'phase:finish'; phase: string; message: string }
+    | { type: 'done'; image: string; imageId: string };
 
 export type MigrationProgressEvent =
     | { type: 'start'; chainId: string; total: number }

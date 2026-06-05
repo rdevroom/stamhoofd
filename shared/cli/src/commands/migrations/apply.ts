@@ -36,6 +36,7 @@ export default class MigrationsApply extends BaseCommand {
         const base = flags.base ?? await resolveBaseImage(context.rootDir, database, tagPrefix, mysqlImage, flags.verbose, catalog, runtime, chains);
         const build = await resolveBuildFlag(flags.build, cache.migrations.build);
         const effectiveBuild = await resolveStaleOutputs(context.rootDir, build);
+        const chainId = await defaultApplyChainId(base, runtime);
         const progress = createMigrationProgressOutput();
         const result = await runMigrationChain({
             rootDir: context.rootDir,
@@ -50,6 +51,7 @@ export default class MigrationsApply extends BaseCommand {
             env: buildBackendEnv(context),
             runtime,
             catalog,
+            chainId,
             onProgress: progress.onProgress,
         }).catch(error => improveImageConflictError(error, '--tag-prefix')).finally(() => progress.stop());
         await writeMigrationChoiceCache(context.rootDir, { tagPrefix, build: effectiveBuild, ...(mysqlImage ? { mysqlImage } : {}) });
@@ -67,6 +69,24 @@ export default class MigrationsApply extends BaseCommand {
             }
         }
     }
+}
+
+async function defaultApplyChainId(base: string, runtime: ContainerRuntime): Promise<string | undefined> {
+    try {
+        const metadata = await runtime.inspectImage(base);
+        const parent = metadata.labels['be.stamhoofd.migrations.chain'];
+        if (!parent) {
+            return undefined;
+        }
+        return `${parent}@${localTimestamp()}`;
+    } catch {
+        return undefined;
+    }
+}
+
+function localTimestamp(date = new Date()): string {
+    const pad = (value: number) => String(value).padStart(2, '0');
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}_${pad(date.getMinutes())}_${pad(date.getSeconds())}`;
 }
 
 async function resolveBaseImage(rootDir: string, database: string, tagPrefix: string, mysqlImage: string | undefined, verbose: boolean, catalog: Awaited<ReturnType<typeof createMigrationCatalog>>, runtime: ContainerRuntime, chains: Awaited<ReturnType<typeof listMigrationImages>>): Promise<string> {

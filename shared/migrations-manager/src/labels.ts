@@ -9,6 +9,7 @@ export function labelsForManifest(manifest: MigrationImageManifest): Record<stri
         'be.stamhoofd.migrations.role': manifest.role,
         'be.stamhoofd.migrations.status': manifest.status,
         'be.stamhoofd.migrations.database': manifest.database,
+        'be.stamhoofd.migrations.display-name': manifest.displayName,
         'be.stamhoofd.migrations.parent-image': manifest.parentImage,
         'be.stamhoofd.migrations.parent-chain': manifest.previousChainId,
         'be.stamhoofd.migrations.forked-from-chain': manifest.previousChainId,

@@ -22,21 +22,21 @@ export async function createBaseImage(options: BaseImageOptions): Promise<BaseIm
     const dumpSha256 = dump ? await sha256File(dump) : undefined;
     const container = safeContainerName(`stamhoofd-migrations-base-${chainId}`);
     const startedAt = new Date().toISOString();
-    await timer.measure('assert-image-missing', { image: options.tag }, () => assertImageMissing(runtime, options.tag));
+    await measureBasePhase(options, timer, 'assert-image-missing', 'Checking image name', { image: options.tag }, () => assertImageMissing(runtime, options.tag));
 
     try {
-        await timer.measure('start-container', { image: mysqlImage, container, publishPort: false }, () => database.start(mysqlImage, container));
-        await timer.measure('create-database', { container, database: options.database }, () => database.createDatabase(container, options.database));
+        await measureBasePhase(options, timer, 'start-container', 'Starting MySQL', { image: mysqlImage, container, publishPort: false }, () => database.start(mysqlImage, container));
+        await measureBasePhase(options, timer, 'create-database', 'Creating database', { container, database: options.database }, () => database.createDatabase(container, options.database));
         if (dump) {
-            await timer.measure('import-dump', { container, database: options.database, dump }, () => database.importDump(container, dump, options.database));
+            await measureBasePhase(options, timer, 'import-dump', 'Importing database dump', { container, database: options.database, dump }, () => database.importDump(container, dump, options.database));
         } else {
             timer.skipped('import-dump', { container, database: options.database });
         }
-        const baseProgress = await timer.measure('detect-applied-migrations', { container, database: options.database }, async () => {
+        const baseProgress = await measureBasePhase(options, timer, 'detect-applied-migrations', 'Detecting applied migrations', { container, database: options.database }, async () => {
             const executed = await database.listExecutedMigrations(container, options.database);
             return detectBaseMigrationProgress(catalog, executed);
         });
-        await timer.measure('prepare-metadata', { container }, () => Promise.resolve());
+        await measureBasePhase(options, timer, 'prepare-metadata', 'Writing metadata', { container }, () => Promise.resolve());
         const finishedAt = new Date().toISOString();
         const manifest: MigrationImageManifest = {
             version: 1,
@@ -45,6 +45,7 @@ export async function createBaseImage(options: BaseImageOptions): Promise<BaseIm
             status: 'base',
             database: options.database,
             image: options.tag,
+            displayName: options.displayName,
             dumpSha256,
             emptyBase: !dump,
             startedAt,
@@ -59,12 +60,20 @@ export async function createBaseImage(options: BaseImageOptions): Promise<BaseIm
             timings: timer.snapshot(),
         };
         await database.writeManifest(container, manifest);
-        await timer.measure('stop-mysql', { container }, () => database.stopForCommit(container));
-        const imageId = await runtime.commit(container, options.tag, { labels: labelsForManifest(manifest) });
+        await measureBasePhase(options, timer, 'stop-mysql', 'Stopping MySQL', { container }, () => database.stopForCommit(container));
+        const imageId = await measureBasePhase(options, timer, 'commit-image', 'Committing image', { container }, () => runtime.commit(container, options.tag, { labels: labelsForManifest(manifest) }));
+        options.onProgress?.({ type: 'done', image: options.tag, imageId });
         return { chainId, image: options.tag, imageId, dumpSha256, manifest };
     } finally {
         await runtime.remove(container);
     }
+}
+
+async function measureBasePhase<T>(options: BaseImageOptions, timer: MigrationTimer, phase: string, message: string, data: Record<string, string | number | boolean | null> | undefined, run: () => Promise<T>): Promise<T> {
+    options.onProgress?.({ type: 'phase:start', phase, message });
+    const result = await timer.measure(phase, data, run);
+    options.onProgress?.({ type: 'phase:finish', phase, message });
+    return result;
 }
 
 export async function runMigrationChain(options: RunMigrationChainOptions): Promise<MigrationChainResult> {

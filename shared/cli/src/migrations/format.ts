@@ -77,7 +77,7 @@ export function formatStatus(status: string): string {
         return 'Failed';
     }
     if (status === 'base') {
-        return 'Base only';
+        return 'Base';
     }
     return 'Unknown';
 }
