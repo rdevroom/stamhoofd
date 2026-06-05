@@ -1,10 +1,12 @@
 import path from 'node:path';
-import { diffMigrationData, diffMigrationSchema, listMigrationImages } from '@stamhoofd/migrations-manager';
+import { spawnSync } from 'node:child_process';
+import { diffMigrationData, diffMigrationSchema, inspectMigrationImage, listMigrationImages } from '@stamhoofd/migrations-manager';
+import type { ImageSummary, MigrationDiffResult } from '@stamhoofd/migrations-manager';
 import { Flags } from '@oclif/core';
 import { BaseCommand } from '../../base-command.js';
 import { formatTable } from '../../runtime/ux.js';
 import { readMigrationChoiceCache, writeMigrationChoiceCache } from '../../migrations/cache.js';
-import { resolveTextFlag, selectImage } from '../../migrations/prompts.js';
+import { isInteractive, resolveTextFlag, selectDiffImagesFromChain, selectDiffMode } from '../../migrations/prompts.js';
 
 export default class MigrationsDiff extends BaseCommand {
     static summary = 'Compare two migration images';
@@ -29,28 +31,138 @@ export default class MigrationsDiff extends BaseCommand {
         const context = await this.createContext(flags);
         const cache = await readMigrationChoiceCache(context.rootDir);
         const chains = (!flags.from || !flags.to) ? await listMigrationImages() : [];
-        const from = flags.from ?? await selectImage(chains, 'Compare from which image?');
-        const to = flags.to ?? await selectImage(chains, 'Compare to which image?');
-        const database = await resolveTextFlag(flags.database, 'database', 'Which database should be compared?', cache.migrations.database);
-        const mode = flags.data ? 'data' : 'schema';
-        const outputPath = flags.output ?? path.join(context.rootDir, '.stamhoofd', 'migrations-diffs', `${safeName(from)}-to-${safeName(to)}.${mode}.diff`);
-        const result = mode === 'data'
-            ? await diffMigrationData({ from, to, database, outputPath })
-            : await diffMigrationSchema({ from, to, database, outputPath });
-        await writeMigrationChoiceCache(context.rootDir, { database });
-        console.log(`${mode === 'data' ? 'Data' : 'Schema'} diff: ${from} -> ${to}`);
-        if (mode === 'data') {
-            const rows = result.preview.split('\n').slice(1).filter(Boolean).map(line => line.split('\t'));
-            console.log(formatTable(['Table', 'Before rows', 'After rows', 'Status'], rows, { title: 'Table summary' }));
-        } else {
-            console.log('\nDiff preview:');
-            console.log(result.preview);
+        const selected = (!flags.from || !flags.to) ? await selectDiffImagesFromChain(chains, { lastChainId: cache.migrations.lastChainId }) : undefined;
+        const from = flags.from ?? imageReference(selected!.from);
+        const to = flags.to ?? imageReference(selected!.to);
+        if (from === to) {
+            throw new Error('Cannot compare a migration image against itself. Select a different target image.');
         }
-        console.log('\nSaved diff:');
-        console.log(`  ${result.outputPath}`);
-        console.log('\nNext step:');
+        const database = flags.database ?? await inferDatabase(from, to, selected?.from, selected?.to) ?? await resolveTextFlag(undefined, 'database', 'Could not infer the database. Which database should be compared?', cache.migrations.database);
+        const modes = await resolveModes(flags.schema, flags.data);
+        await writeMigrationChoiceCache(context.rootDir, { database });
+
+        for (const mode of modes) {
+            const outputPath = outputPathFor(context.rootDir, flags.output, from, to, mode, modes.length);
+            const result = mode === 'data'
+                ? await diffMigrationData({ from, to, database, outputPath })
+                : await diffMigrationSchema({ from, to, database, outputPath });
+            printResult(mode, from, to, result);
+            openDiff(result);
+        }
+    }
+}
+
+async function resolveModes(schema: boolean, data: boolean): Promise<Array<'schema' | 'data'>> {
+    if (schema && data) {
+        return ['schema', 'data'];
+    }
+    if (schema) {
+        return ['schema'];
+    }
+    if (data) {
+        return ['data'];
+    }
+    const mode = await selectDiffMode();
+    return mode === 'both' ? ['schema', 'data'] : [mode];
+}
+
+async function inferDatabase(from: string, to: string, fromImage?: ImageSummary, toImage?: ImageSummary): Promise<string | undefined> {
+    const fromDatabase = databaseFromImage(fromImage) ?? await databaseFromInspect(from);
+    const toDatabase = databaseFromImage(toImage) ?? await databaseFromInspect(to);
+    if (fromDatabase && toDatabase && fromDatabase !== toDatabase) {
+        if (!isInteractive()) {
+            throw new Error(`Selected images use different databases (${fromDatabase} and ${toDatabase}). Pass --database explicitly.`);
+        }
+        return await resolveTextFlag(undefined, 'database', `Selected images use different databases (${fromDatabase} and ${toDatabase}). Which database should be compared?`, fromDatabase);
+    }
+    return fromDatabase ?? toDatabase;
+}
+
+function databaseFromImage(image: ImageSummary | undefined): string | undefined {
+    return image?.labels['be.stamhoofd.migrations.database'];
+}
+
+async function databaseFromInspect(image: string): Promise<string | undefined> {
+    const details = await inspectMigrationImage({ image });
+    return details.manifest?.database ?? details.metadata.labels['be.stamhoofd.migrations.database'];
+}
+
+function outputPathFor(rootDir: string, explicit: string | undefined, from: string, to: string, mode: 'schema' | 'data', modeCount: number): string {
+    if (explicit && modeCount === 1) {
+        return explicit;
+    }
+    return path.join(rootDir, '.stamhoofd', 'migrations-diffs', `${safeName(from)}-to-${safeName(to)}.${mode}.diff`);
+}
+
+function printResult(mode: 'schema' | 'data', from: string, to: string, result: MigrationDiffResult): void {
+    console.log(`${mode === 'data' ? 'Data' : 'Schema'} diff: ${from} -> ${to}`);
+    if (mode === 'data') {
+        const rows = result.preview.split('\n').slice(1).filter(Boolean).map(line => line.split('\t'));
+        console.log(formatTable(['Table', 'Before rows', 'After rows', 'Status'], rows, { title: 'Table summary' }));
+    } else {
+        console.log('\nDiff preview:');
+        console.log(result.preview);
+    }
+    console.log('\nSaved diff:');
+    console.log(`  ${result.outputPath}`);
+}
+
+function openDiff(result: MigrationDiffResult): void {
+    const command = resolveDiffViewer(result);
+    if (!command) {
+        console.log('\nNo diff viewer found. Open manually:');
+        console.log(`  less ${result.outputPath}`);
+        return;
+    }
+    console.log('\nOpening diff viewer:');
+    console.log(`  ${[command.command, ...command.args].join(' ')}`);
+    const opened = spawnSync(command.command, command.args, { stdio: 'inherit' });
+    if (opened.error || (typeof opened.status === 'number' && opened.status !== 0)) {
+        console.log('\nDiff viewer failed. Open manually:');
         console.log(`  less ${result.outputPath}`);
     }
+}
+
+function resolveDiffViewer(result: MigrationDiffResult): { command: string; args: string[] } | undefined {
+    const custom = process.env.STAM_MIGRATIONS_DIFF_VIEWER;
+    if (custom) {
+        const [command, ...args] = splitCommand(custom);
+        if (command) {
+            return { command, args: [...args, ...diffArgsFor(command, result)] };
+        }
+    }
+    if (result.beforePath && result.afterPath && commandExists('difft')) {
+        return { command: 'difft', args: [result.beforePath, result.afterPath] };
+    }
+    if (result.outputPath && commandExists('delta')) {
+        return { command: 'delta', args: [result.outputPath] };
+    }
+    if (result.beforePath && result.afterPath && commandExists('diff')) {
+        return { command: 'diff', args: ['-u', result.beforePath, result.afterPath] };
+    }
+    return undefined;
+}
+
+function diffArgsFor(command: string, result: MigrationDiffResult): string[] {
+    if (result.beforePath && result.afterPath && command !== 'delta') {
+        return [result.beforePath, result.afterPath];
+    }
+    return result.outputPath ? [result.outputPath] : [];
+}
+
+function commandExists(command: string): boolean {
+    return spawnSync('which', [command], { stdio: 'ignore' }).status === 0;
+}
+
+function splitCommand(command: string): string[] {
+    return command.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g)?.map(part => part.replace(/^['"]|['"]$/g, '')) ?? [];
+}
+
+function imageReference(image: { id: string; repository: string; tag: string }): string {
+    if (image.repository && image.tag && image.repository !== '<none>' && image.tag !== '<none>') {
+        return `${image.repository}:${image.tag}`;
+    }
+    return image.id;
 }
 
 function safeName(value: string): string {

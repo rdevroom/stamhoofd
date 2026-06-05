@@ -21,15 +21,16 @@ export async function listMigrationImages(options: { runtime?: ContainerRuntime 
         const failed = sorted.find(image => image.labels['be.stamhoofd.migrations.status'] === 'failed');
         const successes = sorted.filter(image => image.labels['be.stamhoofd.migrations.status'] === 'success');
         const base = sorted.find(image => image.labels['be.stamhoofd.migrations.role'] === 'base');
+        const status: MigrationImageOverview['status'] = failed ? 'failed' : successes.length > 0 ? 'success' : base ? 'base' : 'unknown';
         return {
             chainId,
             images: sorted,
             base,
             latestSuccess: successes.at(-1),
             failed,
-            status: failed ? 'failed' : successes.length > 0 ? 'success' : base ? 'base' : 'unknown',
+            status,
         };
-    });
+    }).sort((a, b) => latestImageDate(b).localeCompare(latestImageDate(a)));
 }
 
 export async function inspectMigrationImage(options: { image: string; runtime?: ContainerRuntime }): Promise<MigrationImageDetails> {
@@ -142,18 +143,28 @@ export async function diffMigrationData(options: MigrationDiffOptions): Promise<
         await waitForMysql(runtime, fromContainer);
         await waitForMysql(runtime, toContainer);
         const tables = (await runtime.exec(toContainer, ['mysql', '-h127.0.0.1', '-uroot', '-proot', '-N', '-e', `SHOW TABLES FROM \`${options.database}\`;`])).stdout.split('\n').filter(Boolean);
+        const beforeLines = ['Table\tRows'];
+        const afterLines = ['Table\tRows'];
         const lines = ['Table\tBefore rows\tAfter rows\tStatus'];
         for (const table of tables) {
             const before = await rowCount(runtime, fromContainer, options.database, table);
             const after = await rowCount(runtime, toContainer, options.database, table);
+            beforeLines.push(`${table}\t${before}`);
+            afterLines.push(`${table}\t${after}`);
             lines.push(`${table}\t${before}\t${after}\t${before === after ? 'Unchanged' : 'Changed'}`);
         }
         const diff = `${lines.join('\n')}\n`;
+        const beforePath = options.outputPath ? options.outputPath.replace(/\.data\.diff$/, '.before.data.tsv') : undefined;
+        const afterPath = options.outputPath ? options.outputPath.replace(/\.data\.diff$/, '.after.data.tsv') : undefined;
         if (options.outputPath) {
             await fs.mkdir(path.dirname(options.outputPath), { recursive: true });
             await fs.writeFile(options.outputPath, diff);
+            if (beforePath && afterPath) {
+                await fs.writeFile(beforePath, `${beforeLines.join('\n')}\n`);
+                await fs.writeFile(afterPath, `${afterLines.join('\n')}\n`);
+            }
         }
-        return { from: options.from, to: options.to, outputPath: options.outputPath, preview: diff.split('\n').slice(0, 20).join('\n') };
+        return { from: options.from, to: options.to, outputPath: options.outputPath, beforePath, afterPath, preview: diff.split('\n').slice(0, 20).join('\n') };
     } finally {
         await runtime.remove(fromContainer);
         await runtime.remove(toContainer);
@@ -178,11 +189,17 @@ async function diffMigrationImages(options: MigrationDiffOptions, dumpMode: '--n
         await fs.writeFile(afterFile, after);
         const diff = await import('./runtime.js').then(({ runCommand }) => runCommand('diff', ['-u', beforeFile, afterFile], { allowFailure: true }));
         const output = diff.stdout || 'No differences found.\n';
+        const beforePath = options.outputPath ? options.outputPath.replace(/\.schema\.diff$/, '.before.schema.sql') : undefined;
+        const afterPath = options.outputPath ? options.outputPath.replace(/\.schema\.diff$/, '.after.schema.sql') : undefined;
         if (options.outputPath) {
             await fs.mkdir(path.dirname(options.outputPath), { recursive: true });
             await fs.writeFile(options.outputPath, output);
+            if (beforePath && afterPath) {
+                await fs.writeFile(beforePath, before);
+                await fs.writeFile(afterPath, after);
+            }
         }
-        return { from: options.from, to: options.to, outputPath: options.outputPath, preview: output.split('\n').slice(0, 80).join('\n') };
+        return { from: options.from, to: options.to, outputPath: options.outputPath, beforePath, afterPath, preview: output.split('\n').slice(0, 80).join('\n') };
     } finally {
         await runtime.remove(fromContainer);
         await runtime.remove(toContainer);
@@ -201,6 +218,11 @@ function imageReference(image: ImageSummary): string {
         return `${image.repository}:${image.tag}`;
     }
     return image.id;
+}
+
+function latestImageDate(chain: MigrationImageOverview): string {
+    const latest = chain.failed ?? chain.latestSuccess ?? chain.base;
+    return latest?.labels['be.stamhoofd.migrations.finished-at'] ?? latest?.createdAt ?? '';
 }
 
 function firstMissingMigration(manifest: MigrationImageManifest | undefined): string | undefined {

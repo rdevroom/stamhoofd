@@ -5,7 +5,7 @@ import { BaseCommand } from '../../base-command.js';
 import { formatTable } from '../../runtime/ux.js';
 import { formatDuration, formatExactTime, formatMigrationLabel, formatRelativeTime, formatStatus } from '../../migrations/format.js';
 import { listMigrationImages } from '@stamhoofd/migrations-manager';
-import { selectImage } from '../../migrations/prompts.js';
+import { selectImageFromChain } from '../../migrations/prompts.js';
 
 export default class MigrationsInspect extends BaseCommand {
     static summary = 'Inspect a migration image';
@@ -21,7 +21,7 @@ export default class MigrationsInspect extends BaseCommand {
 
     async run(): Promise<void> {
         const { flags } = await this.parse(MigrationsInspect);
-        const image = flags.image ?? await selectImage(await listMigrationImages(), 'Which migration image do you want to inspect?');
+        const image = flags.image ?? imageReference((await selectImageFromChain(await listMigrationImages(), { message: 'Which chain contains the image you want to inspect?' })).image);
         const details = await inspectMigrationImage({ image });
         if (flags.json) {
             console.log(JSON.stringify(details, null, 4));
@@ -29,6 +29,13 @@ export default class MigrationsInspect extends BaseCommand {
         }
         console.log(formatDetails(details, { catalog: flags.catalog, labels: flags.labels, logs: flags.logs, logLines: flags['logs-lines'] }));
     }
+}
+
+function imageReference(image: { id: string; repository: string; tag: string }): string {
+    if (image.repository && image.tag && image.repository !== '<none>' && image.tag !== '<none>') {
+        return `${image.repository}:${image.tag}`;
+    }
+    return image.id;
 }
 
 function formatDetails(details: MigrationImageDetails, options: { catalog: boolean; labels: boolean; logs: boolean; logLines: number }): string {
