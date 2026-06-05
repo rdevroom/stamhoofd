@@ -43,6 +43,7 @@ export type RunMigrationChainOptions = {
     env?: NodeJS.ProcessEnv;
     runtime?: ContainerRuntime;
     chainId?: string;
+    catalog?: MigrationCatalogSnapshot;
 };
 
 export type BaseImageOptions = {

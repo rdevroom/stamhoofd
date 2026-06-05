@@ -270,12 +270,12 @@ function firstMissingMigration(manifest: MigrationImageManifest | undefined): st
 }
 
 async function waitForMysql(runtime: ContainerRuntime, container: string): Promise<void> {
-    for (let i = 0; i < 90; i++) {
+    for (let i = 0; i < 360; i++) {
         const result = await runtime.exec(container, ['mysql', '-h127.0.0.1', '-uroot', '-proot', '-e', 'SELECT 1'], { allowFailure: true });
         if (result.status === 0) {
             return;
         }
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        await new Promise(resolve => setTimeout(resolve, 250));
     }
     throw new Error(`MySQL did not become ready in ${container}.`);
 }

@@ -74,12 +74,12 @@ export class MysqlImageDatabase {
     }
 
     private async waitForMysql(container: string): Promise<void> {
-        for (let i = 0; i < 90; i++) {
+        for (let i = 0; i < 360; i++) {
             const result = await this.runtime.exec(container, ['mysql', `-h${mysqlHost}`, `-u${mysqlUser}`, `-p${mysqlPassword}`, '-e', 'SELECT 1'], { allowFailure: true });
             if (result.status === 0) {
                 return;
             }
-            await new Promise(resolve => setTimeout(resolve, 1000));
+            await new Promise(resolve => setTimeout(resolve, 250));
         }
         throw new Error('MySQL did not become ready in time.');
     }

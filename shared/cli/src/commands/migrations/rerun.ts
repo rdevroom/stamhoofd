@@ -1,4 +1,4 @@
-import { detectStaleMigrationOutputs, listMigrationImages, resolveRerunStart, runMigrationChain } from '@stamhoofd/migrations-manager';
+import { createCliContainerRuntime, detectStaleMigrationOutputs, listMigrationImages, resolveRerunStart, runMigrationChain } from '@stamhoofd/migrations-manager';
 import { Flags } from '@oclif/core';
 import { BaseCommand } from '../../base-command.js';
 import { buildBackendEnv } from '../../config/build-config.js';
@@ -25,7 +25,8 @@ export default class MigrationsRerun extends BaseCommand {
         const { flags } = await this.parse(MigrationsRerun);
         const context = await this.createContext(flags);
         const cache = await readMigrationChoiceCache(context.rootDir);
-        const chains = await listMigrationImages();
+        const runtime = await createCliContainerRuntime();
+        const chains = await listMigrationImages({ runtime });
         const chain = flags.chain ?? await selectChain(chains, 'Which chain do you want to rerun?', cache.migrations.lastChainId);
         const selectedChain = chains.find(c => c.chainId === chain);
         const defaultFrom = selectedChain?.failed?.labels['be.stamhoofd.migrations.migration'];
@@ -36,7 +37,7 @@ export default class MigrationsRerun extends BaseCommand {
         const build = await resolveBuildFlag(flags.build, cache.migrations.build);
         const mysqlImage = await resolveOptionalTextFlag(flags['mysql-image'], 'Which MySQL image metadata value should be stored?', cache.migrations.mysqlImage ?? 'docker.io/library/mysql:8.4');
         const effectiveBuild = await resolveStaleOutputs(context.rootDir, build);
-        const start = await resolveRerunStart({ chainId: chain, from });
+        const start = await resolveRerunStart({ chainId: chain, from, runtime });
         console.log(`Rerun will start from the image before "${formatMigrationLabel(start.startFrom).split('\n')[0]}".`);
         if (!await confirmAction('Continue?', true)) {
             throw new Error('Rerun cancelled.');
@@ -55,6 +56,7 @@ export default class MigrationsRerun extends BaseCommand {
             mysqlImage,
             verbose: flags.verbose,
             env: buildBackendEnv(context),
+            runtime,
         }).catch(error => improveImageConflictError(error, '--tag-prefix'));
         await writeMigrationChoiceCache(context.rootDir, { database, tagPrefix, build: effectiveBuild, mysqlImage, lastChainId: chain });
         console.log(`Chain: ${result.chainId}`);
