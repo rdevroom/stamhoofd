@@ -81,6 +81,32 @@ export function formatStatus(status: string): string {
     return 'Unknown';
 }
 
+export function formatStatusColor(status: string): string {
+    const label = formatStatus(status);
+    if (status === 'success') {
+        return chalk.green(label);
+    }
+    if (status === 'failed') {
+        return chalk.red(label);
+    }
+    if (status === 'base') {
+        return chalk.dim(label);
+    }
+    return chalk.yellow(label);
+}
+
+export function formatMigrationNumber(index: number): string {
+    return `#${index + 1}`;
+}
+
+export function formatMigrationProgress(completed: number, total: number): string {
+    return `${completed}/${total}`;
+}
+
+export function padColumns(columns: string[], widths: number[]): string {
+    return columns.map((column, index) => column.padEnd(widths[index] ?? 0)).join('  ').trimEnd();
+}
+
 function parseDate(value: string | Date | undefined): Date | undefined {
     if (!value) {
         return undefined;

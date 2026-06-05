@@ -21,7 +21,7 @@ export default class MigrationsCreateBase extends BaseCommand {
         const context = await this.createContext(flags);
         const cache = await readMigrationChoiceCache(context.rootDir);
         const database = await resolveTextFlag(flags.database, 'database', 'Which database should be created in the base image?', cache.migrations.database);
-        const tag = await resolveTextFlag(flags.tag, 'tag', 'Which local image tag should be created?', cache.migrations.tagPrefix ? `${cache.migrations.tagPrefix}:base` : undefined);
+        const tag = await resolveTextFlag(flags.tag, 'tag', 'Which local image tag should be created for the base database? This is the Docker/Podman image name saved locally, for example localhost/stamhoofd-migrations/manual:base. You will use it later with: yarn stam migrations apply --base <this tag>.', cache.migrations.tagPrefix ? `${cache.migrations.tagPrefix}:base` : undefined);
         const mysqlImage = await resolveOptionalTextFlag(flags['mysql-image'], 'Which MySQL image should be used?', cache.migrations.mysqlImage ?? 'docker.io/library/mysql:8.4');
         const result = await createBaseImage({
             dump: flags.dump,

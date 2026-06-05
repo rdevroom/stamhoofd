@@ -1,6 +1,7 @@
 import { checkbox, confirm, input, select } from '@inquirer/prompts';
-import type { ImageSummary, MigrationImageOverview } from '@stamhoofd/migrations-manager';
-import { formatMigrationLabel, formatRelativeTime, formatStatus, friendlyMigrationName } from './format.js';
+import type { ImageSummary, MigrationCatalogSnapshot, MigrationImageOverview } from '@stamhoofd/migrations-manager';
+import { formatMigrationLabel, formatMigrationNumber, formatMigrationProgress, formatRelativeTime, formatStatusColor, friendlyMigrationName, padColumns } from './format.js';
+import { createChainProgress, imageReference } from './progress.js';
 
 export function isInteractive(): boolean {
     return process.stdin.isTTY === true;
@@ -52,7 +53,7 @@ export async function resolveBuildFlag(value: string | undefined, defaultValue?:
     });
 }
 
-export async function selectChain(chains: MigrationImageOverview[], message: string, lastChainId?: string): Promise<string> {
+export async function selectChain(chains: MigrationImageOverview[], message: string, lastChainId?: string, catalog?: MigrationCatalogSnapshot): Promise<string> {
     if (!isInteractive()) {
         missingFlag('chain');
     }
@@ -66,7 +67,7 @@ export async function selectChain(chains: MigrationImageOverview[], message: str
     return await select({
         message,
         choices: sorted.map(chain => ({
-            name: `${chain.chainId}  ${chainSummary(chain)}${chain.chainId === lastChainId ? '  selected last' : ''}`,
+            name: catalog ? chainChoiceLabel(chain, catalog, chain.chainId === lastChainId) : `${chain.chainId}  ${chainSummary(chain)}${chain.chainId === lastChainId ? '  selected last' : ''}`,
             value: chain.chainId,
         })),
     });
@@ -80,14 +81,14 @@ export async function selectImage(chains: MigrationImageOverview[], message: str
     return await select({
         message,
         choices: images.map(({ chain, image }) => ({
-            name: `${imageReference(image)}  ${chain.chainId}  ${formatStatus(image.labels['be.stamhoofd.migrations.status'] ?? '')}`,
+            name: padColumns([imageReference(image), chain.chainId, formatStatusColor(image.labels['be.stamhoofd.migrations.status'] ?? '')], [60, 18, 12]),
             value: imageReference(image),
         })),
     });
 }
 
-export async function selectImageFromChain(chains: MigrationImageOverview[], options: { message: string; lastChainId?: string }): Promise<{ chain: MigrationImageOverview; image: ImageSummary }> {
-    const chainId = await selectChain(chains, options.message, options.lastChainId);
+export async function selectImageFromChain(chains: MigrationImageOverview[], options: { message: string; lastChainId?: string; catalog?: MigrationCatalogSnapshot }): Promise<{ chain: MigrationImageOverview; image: ImageSummary }> {
+    const chainId = await selectChain(chains, options.message, options.lastChainId, options.catalog);
     const chain = requireChain(chains, chainId);
     const kind = await select({
         message: 'Which image do you want?',
@@ -105,30 +106,30 @@ export async function selectImageFromChain(chains: MigrationImageOverview[], opt
     return { chain, image: await selectMigrationImage(chain, 'Which migration image do you want?') };
 }
 
-export async function selectDiffImagesFromChain(chains: MigrationImageOverview[], options: { lastChainId?: string }): Promise<{ chain: MigrationImageOverview; from: ImageSummary; to: ImageSummary }> {
-    const chainId = await selectChain(chains, 'Which chain do you want to compare?', options.lastChainId);
+export async function selectDiffImagesFromChain(chains: MigrationImageOverview[], options: { lastChainId?: string; catalog?: MigrationCatalogSnapshot }): Promise<{ chain: MigrationImageOverview; from: ImageSummary; to: ImageSummary }> {
+    const chainId = await selectChain(chains, 'Which chain do you want to compare?', options.lastChainId, options.catalog);
     const chain = requireChain(chains, chainId);
-    const from = await selectMigrationImage(chain, 'Start comparing from which image?');
-    const to = await selectDiffTarget(chain, from);
+    const from = await selectMigrationImage(chain, 'Start comparing from which image?', undefined, options.catalog);
+    const to = await selectDiffTarget(chain, from, options.catalog);
     return { chain, from, to };
 }
 
-export async function selectDiffTarget(chain: MigrationImageOverview, from: ImageSummary): Promise<ImageSummary> {
+export async function selectDiffTarget(chain: MigrationImageOverview, from: ImageSummary, catalog?: MigrationCatalogSnapshot): Promise<ImageSummary> {
     const images = chain.images;
     const fromIndex = images.findIndex(image => imageReference(image) === imageReference(from));
     const choices: Array<{ name: string; value: string; disabled?: string }> = [
-        { name: `Selected: ${imageChoiceLabel(from)}`, value: '__selected__', disabled: 'Already selected as the starting image' },
+        { name: `Selected: ${imageChoiceLabel(from, catalog)}`, value: '__selected__', disabled: 'Already selected as the starting image' },
     ];
     const next = fromIndex >= 0 ? images[fromIndex + 1] : undefined;
     const previous = fromIndex > 0 ? images[fromIndex - 1] : undefined;
-    addChoice(choices, next, 'Next image in this chain');
-    addChoice(choices, chain.latestSuccess, 'Latest successful image');
-    addChoice(choices, chain.failed, 'Failed image');
-    addChoice(choices, previous, 'Previous image');
+    addChoice(choices, next, 'Next image in this chain', catalog);
+    addChoice(choices, chain.latestSuccess, 'Latest successful image', catalog);
+    addChoice(choices, chain.failed, 'Failed image', catalog);
+    addChoice(choices, previous, 'Previous image', catalog);
     choices.push({ name: 'Browse another image in this chain', value: '__browse__' });
     const selected = await select({ message: 'Compare against which image?', choices: dedupeChoices(choices, from) });
     if (selected === '__browse__') {
-        return await selectMigrationImage(chain, 'Compare against which image?', from);
+        return await selectMigrationImage(chain, 'Compare against which image?', from, catalog);
     }
     return requireImage(chain.images, selected);
 }
@@ -170,6 +171,35 @@ export async function selectCleanupChains(chains: MigrationImageOverview[]): Pro
     });
 }
 
+export async function selectBaseImage(chains: MigrationImageOverview[], catalog: MigrationCatalogSnapshot): Promise<ImageSummary | 'create'> {
+    if (!isInteractive()) {
+        missingFlag('base');
+    }
+    const baseChains = chains.filter(chain => chain.base);
+    const choices = baseChains.map((chain) => {
+        const progress = createChainProgress(chain, catalog);
+        return {
+            name: padColumns([
+                chain.chainId,
+                formatStatusColor(chain.status),
+                `${formatMigrationProgress(progress.completed, progress.total)} migrations`,
+                imageChoiceLabel(chain.base!, catalog),
+            ], [18, 12, 16, 60]),
+            value: imageReference(chain.base!),
+        };
+    });
+    choices.push({ name: 'Create a new empty base image', value: '__create__' });
+    const selected = await select({ message: 'Which base image should migrations start from?', choices });
+    if (selected === '__create__') {
+        return 'create';
+    }
+    const image = baseChains.flatMap(chain => chain.base ? [chain.base] : []).find(base => imageReference(base) === selected);
+    if (!image) {
+        throw new Error(`Base image not found: ${selected}`);
+    }
+    return image;
+}
+
 export async function confirmAction(message: string, defaultValue = false): Promise<boolean> {
     if (!isInteractive()) {
         return false;
@@ -182,24 +212,24 @@ function chainSummary(chain: MigrationImageOverview): string {
     const migration = latest?.labels['be.stamhoofd.migrations.migration'];
     const label = migration ? friendlyMigrationName(migration) : formatMigrationLabel('base');
     const updated = formatRelativeTime(latest?.labels['be.stamhoofd.migrations.finished-at'] ?? latest?.createdAt);
-    return `${formatStatus(chain.status)}, latest ${label.replace(/\n.*/, '')}, ${updated}`;
+    return `${formatStatusColor(chain.status)}, latest ${label.replace(/\n.*/, '')}, ${updated}`;
 }
 
 function imageKindChoices(chain: MigrationImageOverview): Array<{ name: string; value: string; disabled?: string }> {
     return [
         { name: chain.failed ? `Failed image - ${imageChoiceLabel(chain.failed)}` : 'Failed image', value: 'failed', disabled: chain.failed ? undefined : 'No failed image in this chain' },
-        { name: chain.latestSuccess ? `Latest successful image - ${imageChoiceLabel(chain.latestSuccess)}` : 'Latest successful image', value: 'latest', disabled: chain.latestSuccess ? undefined : 'No successful migration image in this chain' },
+        { name: chain.latestSuccess ? `Last successful migration - ${imageChoiceLabel(chain.latestSuccess)}` : 'Last successful migration', value: 'latest', disabled: chain.latestSuccess ? undefined : 'No successful migration image in this chain' },
         { name: chain.base ? `Base image - ${imageChoiceLabel(chain.base)}` : 'Base image', value: 'base', disabled: chain.base ? undefined : 'No base image in this chain' },
         { name: 'Browse all migration images in this chain', value: 'browse' },
     ];
 }
 
-async function selectMigrationImage(chain: MigrationImageOverview, message: string, exclude?: ImageSummary): Promise<ImageSummary> {
+async function selectMigrationImage(chain: MigrationImageOverview, message: string, exclude?: ImageSummary, catalog?: MigrationCatalogSnapshot): Promise<ImageSummary> {
     const choices = chain.images.map((image) => {
         const reference = imageReference(image);
         const excluded = exclude && imageReference(exclude) === reference;
         return {
-            name: imageChoiceLabel(image),
+            name: imageChoiceLabel(image, catalog),
             value: reference,
             disabled: excluded ? 'Already selected as the starting image' : undefined,
         };
@@ -208,21 +238,21 @@ async function selectMigrationImage(chain: MigrationImageOverview, message: stri
     return requireImage(chain.images, selected);
 }
 
-function imageChoiceLabel(image: ImageSummary): string {
+function imageChoiceLabel(image: ImageSummary, catalog?: MigrationCatalogSnapshot): string {
     const index = image.labels['be.stamhoofd.migrations.migration-index'];
     const migration = image.labels['be.stamhoofd.migrations.migration'] ?? 'base';
-    const prefix = index ? `#${String(Number(index) + 1).padStart(4, '0')}` : 'base';
-    const status = formatStatus(image.labels['be.stamhoofd.migrations.status'] ?? '');
+    const prefix = index !== undefined ? catalog ? formatMigrationProgress(Number(index) + 1, catalog.entries.length) : formatMigrationNumber(Number(index)) : 'base';
+    const status = formatStatusColor(image.labels['be.stamhoofd.migrations.status'] ?? '');
     const updated = formatRelativeTime(image.labels['be.stamhoofd.migrations.finished-at'] ?? image.createdAt);
-    return `${prefix} ${formatMigrationLabel(migration).replace('\n', '  ')}  ${status}  ${updated}`;
+    return padColumns([prefix, formatMigrationLabel(migration).replace('\n', '  '), status, updated], [8, 70, 12, 12]);
 }
 
-function addChoice(choices: Array<{ name: string; value: string; disabled?: string }>, image: ImageSummary | undefined, label: string): void {
+function addChoice(choices: Array<{ name: string; value: string; disabled?: string }>, image: ImageSummary | undefined, label: string, catalog?: MigrationCatalogSnapshot): void {
     if (!image) {
         choices.push({ name: label, value: `__missing_${choices.length}__`, disabled: 'Not available in this chain' });
         return;
     }
-    choices.push({ name: `${label} - ${imageChoiceLabel(image)}`, value: imageReference(image) });
+    choices.push({ name: `${label} - ${imageChoiceLabel(image, catalog)}`, value: imageReference(image) });
 }
 
 function dedupeChoices(choices: Array<{ name: string; value: string; disabled?: string }>, from: ImageSummary): Array<{ name: string; value: string; disabled?: string }> {
@@ -264,9 +294,16 @@ function latestDate(chain: MigrationImageOverview): string {
     return latest?.labels['be.stamhoofd.migrations.finished-at'] ?? latest?.createdAt ?? '';
 }
 
-function imageReference(image: ImageSummary): string {
-    if (image.repository && image.tag && image.repository !== '<none>' && image.tag !== '<none>') {
-        return `${image.repository}:${image.tag}`;
-    }
-    return image.id;
+function chainChoiceLabel(chain: MigrationImageOverview, catalog: MigrationCatalogSnapshot, selectedLast: boolean): string {
+    const progress = createChainProgress(chain, catalog);
+    const next = progress.next ? `${formatMigrationProgress(progress.next.index + 1, progress.total)} ${friendlyMigrationName(progress.next.normalizedFile)}` : '-';
+    const last = progress.lastSuccess ? imageChoiceLabel(progress.lastSuccess, catalog) : '-';
+    return padColumns([
+        chain.chainId,
+        formatStatusColor(chain.status),
+        `${formatMigrationProgress(progress.completed, progress.total)} migrations`,
+        `Last ${last}`,
+        `Next ${next}`,
+        selectedLast ? 'selected last' : '',
+    ], [18, 12, 16, 96, 40, 14]);
 }
