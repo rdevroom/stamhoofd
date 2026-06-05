@@ -1,4 +1,5 @@
 import chalk from 'chalk';
+import { stripVTControlCharacters } from 'node:util';
 
 export function friendlyMigrationName(file: string): string {
     const withoutExtension = file.replace(/\.[^.]+$/, '');
@@ -95,6 +96,16 @@ export function formatStatusColor(status: string): string {
     return chalk.yellow(label);
 }
 
+export function formatStatusIcon(status: string): string {
+    if (status === 'success') {
+        return chalk.green('✓');
+    }
+    if (status === 'failed') {
+        return chalk.red('✖');
+    }
+    return chalk.dim('○');
+}
+
 export function formatMigrationNumber(index: number): string {
     return `#${index + 1}`;
 }
@@ -104,7 +115,21 @@ export function formatMigrationProgress(completed: number, total: number): strin
 }
 
 export function padColumns(columns: string[], widths: number[]): string {
-    return columns.map((column, index) => column.padEnd(widths[index] ?? 0)).join('  ').trimEnd();
+    return columns.map((column, index) => padVisible(column, widths[index] ?? 0)).join('  ').trimEnd();
+}
+
+export function padVisible(value: string, width: number): string {
+    return value + ' '.repeat(Math.max(0, width - stripVTControlCharacters(value).length));
+}
+
+export function truncateVisible(value: string, maxLength: number): string {
+    if (stripVTControlCharacters(value).length <= maxLength) {
+        return value;
+    }
+    if (maxLength <= 1) {
+        return '…'.slice(0, maxLength);
+    }
+    return `${stripVTControlCharacters(value).slice(0, maxLength - 1)}…`;
 }
 
 function parseDate(value: string | Date | undefined): Date | undefined {

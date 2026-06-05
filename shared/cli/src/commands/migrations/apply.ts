@@ -30,7 +30,7 @@ export default class MigrationsApply extends BaseCommand {
         const catalog = await createMigrationCatalog(context.rootDir);
         const runtime = await createCliContainerRuntime();
         const chains = await listMigrationImages({ runtime });
-        const tagPrefix = await resolveTagPrefixFlag(flags['tag-prefix'], chains, cache.migrations.tagPrefix);
+        const tagPrefix = await resolveTagPrefixFlag(flags['tag-prefix'], chains, catalog, cache.migrations.tagPrefix);
         const database = flags.database ?? migrationDatabaseName;
         const mysqlImage = flags['mysql-image'];
         const base = flags.base ?? await resolveBaseImage(context.rootDir, database, tagPrefix, mysqlImage, flags.verbose, catalog, runtime, chains);

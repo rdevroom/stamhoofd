@@ -38,7 +38,7 @@ describe('MigrationsCreateBase command', () => {
             dump: '/tmp/database.dump',
             database: 'stamhoofd-development',
             tag: 'stamhoofd-migrations/dev:base',
-            chainId: 'stamhoofd-migrations/dev:base',
+            chainId: 'base',
             mysqlImage: 'mysql:8.4',
             verbose: true,
             runtime: expect.any(Object),

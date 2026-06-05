@@ -16,23 +16,64 @@ export async function listMigrationImages(options: { runtime?: ContainerRuntime 
         }
         byChain.set(chain, [...(byChain.get(chain) ?? []), image]);
     }
-    return [...byChain.entries()].map(([chainId, chainImages]) => {
+    const overviews = [...byChain.entries()].map(([chainId, chainImages]) => {
         const sorted = chainImages.sort(compareImageLayer);
         const failed = sorted.find(image => image.labels['be.stamhoofd.migrations.status'] === 'failed');
         const successes = sorted.filter(image => image.labels['be.stamhoofd.migrations.status'] === 'success');
         const base = sorted.find(image => image.labels['be.stamhoofd.migrations.role'] === 'base');
         const status: MigrationImageOverview['status'] = failed ? 'failed' : successes.length > 0 ? 'success' : base ? 'base' : 'unknown';
         const latest = failed ?? successes.at(-1) ?? base;
+        const firstMigration = sorted.find(image => image.labels['be.stamhoofd.migrations.role'] === 'migration');
         return {
             chainId,
             images: sorted,
             base,
             latestSuccess: successes.at(-1),
             failed,
-            parentChainId: latest?.labels['be.stamhoofd.migrations.parent-chain'],
+            parentChainId: latest?.labels['be.stamhoofd.migrations.parent-chain'] ?? firstMigration?.labels['be.stamhoofd.migrations.parent-chain'],
             status,
         };
-    }).sort((a, b) => latestImageDate(b).localeCompare(latestImageDate(a)));
+    });
+
+    inferParentChains(overviews);
+    return overviews.sort((a, b) => latestImageDate(b).localeCompare(latestImageDate(a)));
+}
+
+function inferParentChains(chains: MigrationImageOverview[]): void {
+    const baseReferences = new Map<string, string>();
+    for (const chain of chains) {
+        if (!chain.base) {
+            continue;
+        }
+        for (const reference of possibleImageReferences(chain.base)) {
+            baseReferences.set(reference, chain.chainId);
+        }
+    }
+
+    for (const chain of chains) {
+        if (chain.parentChainId) {
+            continue;
+        }
+        const firstMigration = chain.images.find(image => image.labels['be.stamhoofd.migrations.role'] === 'migration');
+        const parentImage = firstMigration?.labels['be.stamhoofd.migrations.parent-image'];
+        const parentChainId = parentImage ? baseReferences.get(parentImage) : undefined;
+        if (parentChainId && parentChainId !== chain.chainId) {
+            chain.parentChainId = parentChainId;
+        }
+    }
+}
+
+function possibleImageReferences(image: ImageSummary): string[] {
+    const references = new Set<string>([imageReference(image), image.id]);
+    if (image.repository && image.repository !== '<none>') {
+        references.add(image.repository);
+        references.add(image.repository.split('/').at(-1) ?? image.repository);
+        if (image.tag && image.tag !== '<none>') {
+            references.add(`${image.repository}:${image.tag}`);
+            references.add(`${image.repository.split('/').at(-1) ?? image.repository}:${image.tag}`);
+        }
+    }
+    return [...references].filter(Boolean);
 }
 
 export async function inspectMigrationImage(options: { image: string; runtime?: ContainerRuntime }): Promise<MigrationImageDetails> {

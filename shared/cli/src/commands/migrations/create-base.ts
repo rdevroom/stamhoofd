@@ -3,7 +3,7 @@ import { Flags } from '@oclif/core';
 import { BaseCommand } from '../../base-command.js';
 import { readMigrationChoiceCache, writeMigrationChoiceCache } from '../../migrations/cache.js';
 import { improveImageConflictError } from '../../migrations/errors.js';
-import { resolveTextFlag } from '../../migrations/prompts.js';
+import { resolveOptionalInputFlag, resolveTextFlag } from '../../migrations/prompts.js';
 import { migrationDatabaseName } from '../../migrations/progress.js';
 
 export default class MigrationsCreateBase extends BaseCommand {
@@ -26,11 +26,13 @@ export default class MigrationsCreateBase extends BaseCommand {
         const database = flags.database ?? migrationDatabaseName;
         printExplanation();
         const tag = await resolveTextFlag(flags.tag, 'tag', 'Which Docker/Podman tag should be created for the base image?', defaultLocalTag());
+        const dump = await resolveOptionalInputFlag(flags.dump, 'Which database dump should be imported? Leave empty to create an empty base image.');
         const mysqlImage = flags['mysql-image'];
-        const chainId = chains.some(chain => chain.chainId === tag) ? undefined : tag;
+        const defaultChainId = chainIdFromTag(tag);
+        const chainId = defaultChainId && !chains.some(chain => chain.chainId === defaultChainId) ? defaultChainId : undefined;
         const result = await createBaseImage({
             rootDir: context.rootDir,
-            dump: flags.dump,
+            dump,
             database,
             tag,
             chainId,
@@ -38,7 +40,8 @@ export default class MigrationsCreateBase extends BaseCommand {
             verbose: flags.verbose,
             runtime,
         }).catch(error => improveImageConflictError(error, '--tag'));
-        await writeMigrationChoiceCache(context.rootDir, { ...(mysqlImage ? { mysqlImage } : {}), tagPrefix: tag.replace(/:base$/, '') });
+        const tagPrefix = tagPrefixFromTag(tag);
+        await writeMigrationChoiceCache(context.rootDir, { ...(mysqlImage ? { mysqlImage } : {}), tagPrefix });
         console.log(`Created base image ${result.image} (${result.imageId})`);
         console.log(`Chain: ${result.chainId}`);
         console.log('The Docker/Podman tag points to this one image. The chain id groups this base and future migration images.');
@@ -49,8 +52,24 @@ export default class MigrationsCreateBase extends BaseCommand {
         }
         console.log(`Detected applied migrations: ${result.manifest.baseMigrationCount ?? 0}/${result.manifest.baseMigrationTotal ?? 0}`);
         console.log('\nNext step:');
-        console.log(`  yarn stam migrations apply --base ${result.image} --tag-prefix ${tag.replace(/:base$/, '')}`);
+        console.log(`  yarn stam migrations apply --base ${result.image} --tag-prefix ${tagPrefix}`);
     }
+}
+
+function chainIdFromTag(tag: string): string | undefined {
+    const separator = tag.lastIndexOf(':');
+    const slash = tag.lastIndexOf('/');
+    const tagName = separator > slash ? tag.slice(separator + 1) : tag;
+    return tagName || undefined;
+}
+
+function tagPrefixFromTag(tag: string): string {
+    const separator = tag.lastIndexOf(':');
+    const slash = tag.lastIndexOf('/');
+    if (separator <= slash) {
+        return tag;
+    }
+    return tag.slice(0, separator);
 }
 
 function printExplanation(): void {
@@ -61,5 +80,5 @@ function printExplanation(): void {
 
 function defaultLocalTag(date = new Date()): string {
     const pad = (value: number) => String(value).padStart(2, '0');
-    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}_${pad(date.getMinutes())}_${pad(date.getSeconds())}`;
+    return `localhost/stamhoofd-migrations/base:${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}_${pad(date.getMinutes())}_${pad(date.getSeconds())}`;
 }
