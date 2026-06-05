@@ -1,13 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import DbCopy from './copy.js';
+import DbExport from './export.js';
+import DbImport from './import.js';
 import DbMove from './move.js';
 import DbRemove from './remove.js';
-import { input, select } from '@inquirer/prompts';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { confirm, input, select } from '@inquirer/prompts';
 import { run } from '../../runtime/command-runner.js';
 import { resetContainerRuntimeCacheForTests } from '../../services/docker.js';
 
 vi.mock('@inquirer/prompts', () => ({
     input: vi.fn(),
+    confirm: vi.fn(),
     select: vi.fn(),
 }));
 
@@ -26,8 +32,18 @@ describe('database management commands', () => {
             if (args.includes('SHOW DATABASES;')) {
                 return { stdout: 'source-db\nother-db\n', stderr: '', status: 0 };
             }
+            if (args.some(arg => arg.includes('INFORMATION_SCHEMA.SCHEMATA'))) {
+                return { stdout: '', stderr: '', status: 0 };
+            }
+            if (args.some(arg => arg.includes('INFORMATION_SCHEMA.TABLES'))) {
+                return { stdout: 'members\norganizations\n', stderr: '', status: 0 };
+            }
+            if (args.some(arg => arg.includes('INFORMATION_SCHEMA.COLUMNS'))) {
+                return { stdout: 'id\nname\n', stderr: '', status: 0 };
+            }
             return undefined;
         });
+        vi.mocked(confirm).mockResolvedValue(true);
     });
 
     it('copies a database from explicit flags without prompting', async () => {
@@ -38,8 +54,44 @@ describe('database management commands', () => {
         expect(select).not.toHaveBeenCalled();
         expect(run).toHaveBeenNthCalledWith(1, 'podman', ['--version'], { capture: true, allowFailure: true });
         expect(run).toHaveBeenNthCalledWith(2, 'podman', ['info'], { quiet: true });
-        expect(run).toHaveBeenNthCalledWith(3, 'podman', ['exec', 'stamhoofd-mysql', 'mysql', '-h127.0.0.1', '-uroot', '-proot', '-e', 'CREATE DATABASE IF NOT EXISTS `target-db` CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;'], expect.anything());
-        expect(run).toHaveBeenNthCalledWith(4, 'podman', ['exec', 'stamhoofd-mysql', 'sh', '-c', "mysqldump -h'127.0.0.1' -u'root' -p'root' --single-transaction --routines --triggers --events 'source-db' | mysql -h'127.0.0.1' -u'root' -p'root' 'target-db'"], expect.anything());
+        expect(run).toHaveBeenCalledWith('podman', ['exec', 'stamhoofd-mysql', 'mysql', '-h127.0.0.1', '-uroot', '-proot', '-e', 'CREATE DATABASE IF NOT EXISTS `target-db` CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;'], expect.anything());
+        expect(run).toHaveBeenCalledWith('podman', ['exec', 'stamhoofd-mysql', 'sh', '-c', "mysqldump -h'127.0.0.1' -u'root' -p'root' --single-transaction --no-data --routines --triggers --events 'source-db' | mysql -h'127.0.0.1' -u'root' -p'root' 'target-db'"], expect.anything());
+        expect(run).toHaveBeenCalledWith('podman', ['exec', 'stamhoofd-mysql', 'mysql', '-h127.0.0.1', '-uroot', '-proot', '-e', 'SET FOREIGN_KEY_CHECKS=0; INSERT INTO `target-db`.`members` (`id`, `name`) SELECT `id`, `name` FROM `source-db`.`members`; SET FOREIGN_KEY_CHECKS=1;'], expect.anything());
+    });
+
+    it('fails copy when the target database exists without force', async () => {
+        vi.mocked(run).mockImplementation(async (_command, args) => {
+            if (args[0] === '--version') {
+                return { stdout: 'podman version 5.0.0', stderr: '', status: 0 };
+            }
+            if (args.some(arg => arg.includes('INFORMATION_SCHEMA.SCHEMATA'))) {
+                return { stdout: 'target-db\n', stderr: '', status: 0 };
+            }
+            return undefined;
+        });
+        const command = createCommand(DbCopy, { from: 'source-db', to: 'target-db' });
+
+        await expect(command.run()).rejects.toThrow('Target database target-db already exists');
+    });
+
+    it('drops existing target when copy uses force', async () => {
+        vi.mocked(run).mockImplementation(async (_command, args) => {
+            if (args[0] === '--version') {
+                return { stdout: 'podman version 5.0.0', stderr: '', status: 0 };
+            }
+            if (args.some(arg => arg.includes('INFORMATION_SCHEMA.SCHEMATA'))) {
+                return { stdout: 'target-db\n', stderr: '', status: 0 };
+            }
+            if (args.some(arg => arg.includes('INFORMATION_SCHEMA.TABLES')) || args.some(arg => arg.includes('INFORMATION_SCHEMA.COLUMNS'))) {
+                return { stdout: '', stderr: '', status: 0 };
+            }
+            return undefined;
+        });
+        const command = createCommand(DbCopy, { from: 'source-db', to: 'target-db', force: true });
+
+        await command.run();
+
+        expect(run).toHaveBeenCalledWith('podman', ['exec', 'stamhoofd-mysql', 'mysql', '-h127.0.0.1', '-uroot', '-proot', '-e', 'DROP DATABASE IF EXISTS `target-db`;'], expect.anything());
     });
 
     it('moves a database by copying and dropping the source', async () => {
@@ -47,7 +99,28 @@ describe('database management commands', () => {
 
         await command.run();
 
+        expect(run).toHaveBeenCalledWith('podman', ['exec', 'stamhoofd-mysql', 'mysql', '-h127.0.0.1', '-uroot', '-proot', '-e', 'RENAME TABLE `source-db`.`members` TO `target-db`.`members`, `source-db`.`organizations` TO `target-db`.`organizations`;'], expect.anything());
         expect(run).toHaveBeenCalledWith('podman', ['exec', 'stamhoofd-mysql', 'mysql', '-h127.0.0.1', '-uroot', '-proot', '-e', 'DROP DATABASE IF EXISTS `source-db`;'], expect.anything());
+    });
+
+    it('exports a selected database with gzip and gpg', async () => {
+        const command = createCommand(DbExport, { from: 'source-db', output: '/tmp/source-db.sql.gz.gpg', gzip: true, encrypt: true, recipient: 'dev@example.com' });
+
+        await command.run();
+
+        expect(run).toHaveBeenCalledWith('sh', ['-c', "'podman' exec 'stamhoofd-mysql' mysqldump -h'127.0.0.1' -u'root' -p'root' --single-transaction --quick --routines --triggers --events 'source-db' | gzip -c | gpg --batch --yes --trust-model always --encrypt --recipient 'dev@example.com' > '/tmp/source-db.sql.gz.gpg'"], expect.anything());
+    });
+
+    it('imports a database export into a forced target', async () => {
+        const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'stam-db-import-test-'));
+        const inputFile = path.join(tempDir, 'backup.sql.gz.gpg');
+        await fs.writeFile(inputFile, 'dump');
+        const command = createCommand(DbImport, { input: inputFile, to: 'target-db', force: true });
+
+        await command.run();
+
+        expect(run).toHaveBeenCalledWith('sh', ['-c', `gpg --batch --decrypt '${inputFile}' | gzip -dc | 'podman' exec -i 'stamhoofd-mysql' mysql -h'127.0.0.1' -u'root' -p'root' 'target-db'`], expect.anything());
+        await fs.rm(tempDir, { recursive: true, force: true });
     });
 
     it('removes a database selected by explicit from flag', async () => {
@@ -122,10 +195,10 @@ describe('database management commands', () => {
     });
 });
 
-function createCommand<T extends DbCopy | DbMove | DbRemove>(CommandClass: new (argv: string[], config: any) => T, flags: { from?: string; to?: string }): T {
+function createCommand<T extends DbCopy | DbMove | DbRemove | DbExport | DbImport>(CommandClass: new (argv: string[], config: any) => T, flags: { from?: string; to?: string; input?: string; output?: string; gzip?: boolean; encrypt?: boolean; recipient?: string; force?: boolean }): T {
     const command = new CommandClass([], {} as any);
     (command as any).config = {};
-    (command as any).parse = vi.fn(async () => ({ flags: { env: 'stamhoofd', verbose: false, ...flags } }));
+    (command as any).parse = vi.fn(async () => ({ flags: { env: 'stamhoofd', verbose: false, force: false, ...flags } }));
     (command as any).createContext = vi.fn(async () => ({
         rootDir: '/repo',
         generatedDir: '/repo/.development/cli/generated',

@@ -1,6 +1,6 @@
 import { Flags } from '@oclif/core';
 import { BaseCommand } from '../../base-command.js';
-import { copyDatabase, currentDatabase, dropDatabase, resolveDatabaseOption } from '../../runtime/database-command-helpers.js';
+import { currentDatabase, moveDatabase, resolveDatabaseOption } from '../../runtime/database-command-helpers.js';
 
 export default class DbMove extends BaseCommand {
     static aliases = ['db mv'];
@@ -15,6 +15,7 @@ export default class DbMove extends BaseCommand {
         ...BaseCommand.instanceFlags,
         from: Flags.string({ description: 'Database name to move from' }),
         to: Flags.string({ description: 'Database name to move to' }),
+        force: Flags.boolean({ default: false, description: 'Drop and recreate the target database if it already exists' }),
     };
 
     async run(): Promise<void> {
@@ -24,8 +25,7 @@ export default class DbMove extends BaseCommand {
         const from = await resolveDatabaseOption({ flag: flags.from, message: 'Select the database to move from', current, includeCurrent: false });
         const to = await resolveDatabaseOption({ flag: flags.to, message: 'Select the database to move to', current, includeCurrent: true, customInput: true });
 
-        await copyDatabase(from, to);
-        await dropDatabase(from);
+        await moveDatabase(from, to, { force: flags.force });
         this.log(`Moved local MySQL database ${from} to ${to}.`);
     }
 }
