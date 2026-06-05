@@ -134,7 +134,7 @@ export async function runDev(context: CliContext, target: DevTarget, options: { 
             }
         }
 
-        await writeInstanceManifest(context, { dashboard: domains.dashboard, api: domains.api, renderer: domains.renderer, registration: domains.registration, webshop: domains.webshop });
+        await writeInstanceManifest(context, { dashboard: domains.dashboard, api: domains.api, renderer: domains.renderer, registration: domains.registration, webshop: domains.webshop, sso: domains.sso });
         if (options.services) {
             await CaddyService.reload(context);
             servicesCheckInterval = setInterval(() => {

@@ -22,6 +22,7 @@ export type InstanceManifest = {
         renderer: string;
         registration?: string;
         webshop?: string;
+        sso?: string;
     };
     ports: ReturnType<typeof buildPorts>;
 };
@@ -160,6 +161,7 @@ export function instanceManifestToRouteManifest(manifest: InstanceManifest): Rou
     if (manifest.domains.webshop) {
         routes.push({ hosts: [manifest.domains.webshop], port: manifest.ports.webshop });
     }
+    routes.push({ hosts: [manifest.domains.sso ?? siblingDomain(manifest.domains.dashboard, 'sso')], port: manifest.ports.sso });
 
     return {
         name: manifest.name,
@@ -171,6 +173,11 @@ export function instanceManifestToRouteManifest(manifest: InstanceManifest): Rou
         routes,
         tlsSubjects: [...new Set(routes.flatMap(route => route.hosts))],
     };
+}
+
+function siblingDomain(domain: string, label: string): string {
+    const [, ...rest] = domain.split('.');
+    return [label, ...rest].join('.');
 }
 
 export function sharedDir(context: CliContext): string {

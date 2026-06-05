@@ -4,7 +4,7 @@ import type { CliContext } from '../context/create-context.js';
 import { buildPorts } from '../context/ports.js';
 import { buildDomains } from './build-config.js';
 import { listActiveRouteManifests, sharedDir } from '../runtime/manifest-store.js';
-import type { RouteManifestRoute } from '../runtime/manifest-store.js';
+import type { RouteManifest, RouteManifestRoute } from '../runtime/manifest-store.js';
 import { caddyAdminPort, caddyHttpPort, caddyHttpsPort, caddySetupAdminPort, caddySetupHttpPort, caddySetupHttpsPort, localIpv4Host, localhostPort } from './shared-service-config.js';
 
 type CaddyRoute = {
@@ -36,6 +36,22 @@ type CaddyConfig = {
     };
 };
 
+export type CaddyRouteSource = 'active instance' | 'current instance' | 'playwright worker' | 'shared service';
+
+export type CaddyRouteOverview = {
+    hosts: string[];
+    port: number;
+    upstream: string;
+    source: CaddyRouteSource;
+    sourceOrder: number;
+};
+
+export type CaddySubjectOverview = {
+    subject: string;
+    source: CaddyRouteSource;
+    sourceOrder: number;
+};
+
 export async function writeCaddyConfig(context: CliContext, options: { httpPort?: number; httpsPort?: number; disableRedirects?: boolean; proxyHost?: string; listenHost?: string; adminListenHost?: string; adminOrigin?: string } = {}): Promise<string> {
     const configPath = path.join(sharedDir(context), 'caddy.json');
     await writeReadableConfig(configPath, JSON.stringify(await buildCaddyConfig(context, options), null, 4));
@@ -65,41 +81,13 @@ function route(hosts: string[], port: number, proxyHost: string): CaddyRoute {
 }
 
 export async function buildCaddyConfig(context: CliContext, options: { setup?: boolean; httpPort?: number; httpsPort?: number; disableRedirects?: boolean; proxyHost?: string; listenHost?: string; adminListenHost?: string; adminOrigin?: string } = {}): Promise<CaddyConfig> {
-    const domains = buildDomains(context);
-    const ports = buildPorts(context);
-    const activeManifests = await listActiveRouteManifests(context);
+    const overview = await buildCaddyOverview(context, options);
     const proxyHost = options.proxyHost ?? localIpv4Host;
     const listenHost = options.listenHost ?? localIpv4Host;
     const adminListenHost = options.adminListenHost ?? localIpv4Host;
     const listenPort = (port: number) => `${listenHost}:${port}`;
-    const routes = [
-        // Active instance manifests let the shared Caddy container keep routing
-        // requests for other running workspaces and test workers.
-        ...activeManifests.flatMap(manifest => manifest.routes.map(manifestRoute => routeFromManifest(manifestRoute, proxyHost))),
-        route([domains.renderer], ports.renderer, proxyHost),
-        route([domains.api, `*.${domains.api}`], ports.api, proxyHost),
-        route([domains.dashboard], ports.dashboard, proxyHost),
-        route([domains.registration, `*.${domains.registration}`], ports.registration, proxyHost),
-        route([domains.webshop], ports.webshop, proxyHost),
-        route([domains.mail], ports.maildevHttp, proxyHost),
-        route([domains.files], ports.rustfs, proxyHost),
-        route([domains.filesConsole], ports.rustfsConsole, proxyHost),
-        route([domains.sso], ports.sso, proxyHost),
-    ];
-    const subjects = [...new Set([
-        domains.dashboard,
-        domains.api,
-        `*.${domains.api}`,
-        domains.renderer,
-        domains.registration,
-        `*.${domains.registration}`,
-        domains.webshop,
-        domains.mail,
-        domains.files,
-        domains.filesConsole,
-        domains.sso,
-        ...activeManifests.flatMap(manifest => manifest.tlsSubjects),
-    ])];
+    const routes = overview.routes.map(routeOverview => route(routeOverview.hosts, routeOverview.port, proxyHost));
+    const subjects = overview.subjects.map(subject => subject.subject);
 
     return {
         admin: {
@@ -131,6 +119,61 @@ export async function buildCaddyConfig(context: CliContext, options: { setup?: b
     };
 }
 
-function routeFromManifest(manifestRoute: RouteManifestRoute, proxyHost: string) {
-    return route(manifestRoute.hosts, manifestRoute.port, proxyHost);
+export async function buildCaddyOverview(context: CliContext, options: { proxyHost?: string } = {}): Promise<{ routes: CaddyRouteOverview[]; subjects: CaddySubjectOverview[] }> {
+    const domains = buildDomains(context);
+    const ports = buildPorts(context);
+    const proxyHost = options.proxyHost ?? localIpv4Host;
+    const activeManifests = await listActiveRouteManifests(context);
+    const routes = [
+        ...activeManifests.flatMap(manifest => manifest.routes.map(manifestRoute => routeFromManifest(manifest, manifestRoute, proxyHost))),
+        routeOverview([domains.renderer], ports.renderer, proxyHost, 'current instance'),
+        routeOverview([domains.api, `*.${domains.api}`], ports.api, proxyHost, 'current instance'),
+        routeOverview([domains.dashboard], ports.dashboard, proxyHost, 'current instance'),
+        routeOverview([domains.registration, `*.${domains.registration}`], ports.registration, proxyHost, 'current instance'),
+        routeOverview([domains.webshop], ports.webshop, proxyHost, 'current instance'),
+        routeOverview([domains.sso], ports.sso, proxyHost, 'current instance'),
+        routeOverview([domains.mail], ports.maildevHttp, proxyHost, 'shared service'),
+        routeOverview([domains.files], ports.rustfs, proxyHost, 'shared service'),
+        routeOverview([domains.filesConsole], ports.rustfsConsole, proxyHost, 'shared service'),
+    ];
+    const subjects = uniqueSubjects(routes.flatMap(route => route.hosts.map(subject => ({ subject, source: route.source, sourceOrder: route.sourceOrder }))));
+    return { routes, subjects };
+}
+
+function routeFromManifest(manifest: RouteManifest, manifestRoute: RouteManifestRoute, proxyHost: string): CaddyRouteOverview {
+    return routeOverview(manifestRoute.hosts, manifestRoute.port, proxyHost, manifest.kind === 'playwright-worker' ? 'playwright worker' : 'active instance');
+}
+
+function routeOverview(hosts: string[], port: number, proxyHost: string, source: CaddyRouteSource): CaddyRouteOverview {
+    return {
+        hosts,
+        port,
+        upstream: `${proxyHost}:${port}`,
+        source,
+        sourceOrder: sourceOrder(source),
+    };
+}
+
+function sourceOrder(source: CaddyRouteSource): number {
+    switch (source) {
+        case 'current instance':
+            return 10;
+        case 'shared service':
+            return 20;
+        case 'active instance':
+            return 30;
+        case 'playwright worker':
+            return 40;
+    }
+}
+
+function uniqueSubjects(subjects: CaddySubjectOverview[]): CaddySubjectOverview[] {
+    const seen = new Set<string>();
+    return subjects.filter((subject) => {
+        if (seen.has(subject.subject)) {
+            return false;
+        }
+        seen.add(subject.subject);
+        return true;
+    });
 }
