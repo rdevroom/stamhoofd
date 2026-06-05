@@ -190,6 +190,21 @@ export type MigrationDiffResult = {
     preview: string;
 };
 
+export type MigrationSqlExportOptions = {
+    image: string;
+    database?: string;
+    tables?: string[];
+    outputPath: string;
+    runtime?: ContainerRuntime;
+};
+
+export type MigrationSqlExportResult = {
+    image: string;
+    database: string;
+    tables: string[];
+    outputPath: string;
+};
+
 export type RunResult = {
     stdout: string;
     stderr: string;

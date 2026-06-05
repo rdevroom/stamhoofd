@@ -4,7 +4,7 @@ import { Flags } from '@oclif/core';
 import { BaseCommand } from '../../base-command.js';
 import { formatTable } from '../../runtime/ux.js';
 import { formatDuration, formatExactTime, formatMigrationLabel, formatMigrationProgress, formatRelativeTime, formatStatusColor, friendlyMigrationName } from '../../migrations/format.js';
-import { createChainProgress, imageReference } from '../../migrations/progress.js';
+import { chainDisplayName, createChainProgress, imageReference } from '../../migrations/progress.js';
 import { selectChain, selectImageFromChain } from '../../migrations/prompts.js';
 
 export default class MigrationsInspect extends BaseCommand {
@@ -128,8 +128,10 @@ async function formatChainOverview(chainId: string, catalog: MigrationCatalogSna
         throw new Error(`Migration chain not found: ${chainId}`);
     }
     const progress = createChainProgress(chain, catalog);
+    const display = chainDisplayName(chain);
     const lines = [
-        `Chain ${chain.chainId}`,
+        `Chain ${display.primary}`,
+        `${display.secondary}`,
         `${formatStatusColor(chain.status)}, ${formatMigrationProgress(progress.completed, progress.total)} migrations, updated ${formatRelativeTime(progress.latest?.labels['be.stamhoofd.migrations.finished-at'] ?? progress.latest?.createdAt)}`,
         '',
         ...formatChainGraph(chain, catalog),

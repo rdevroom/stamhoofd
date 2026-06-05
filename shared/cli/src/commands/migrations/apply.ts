@@ -6,7 +6,7 @@ import { readMigrationChoiceCache, writeMigrationChoiceCache } from '../../migra
 import { improveImageConflictError } from '../../migrations/errors.js';
 import { formatMigrationLabel } from '../../migrations/format.js';
 import { confirmAction, resolveBuildFlag, resolveOptionalTextFlag, resolveTextFlag, selectBaseImage } from '../../migrations/prompts.js';
-import { imageReference } from '../../migrations/progress.js';
+import { imageReference, migrationDatabaseName } from '../../migrations/progress.js';
 
 export default class MigrationsApply extends BaseCommand {
     static summary = 'Apply migrations as local image layers';
@@ -15,7 +15,7 @@ export default class MigrationsApply extends BaseCommand {
         ...BaseCommand.environmentFlags,
         base: Flags.string({ description: 'Base image to start from' }),
         'tag-prefix': Flags.string({ description: 'Local tag prefix for migration layers' }),
-        database: Flags.string({ description: 'Database name to migrate' }),
+        database: Flags.string({ description: 'Database name to migrate', hidden: true }),
         'continue-on-failure': Flags.boolean({ description: 'Continue after a failed migration', default: false }),
         'allow-changed-files': Flags.boolean({ description: 'Allow changed migration files', default: false }),
         build: Flags.string({ description: 'Build behavior', options: ['auto', 'skip', 'force'] }),
@@ -28,7 +28,7 @@ export default class MigrationsApply extends BaseCommand {
         const cache = await readMigrationChoiceCache(context.rootDir);
         const catalog = await createMigrationCatalog(context.rootDir);
         const tagPrefix = await resolveTextFlag(flags['tag-prefix'], 'tag-prefix', 'Which local tag prefix should migration layers use?', cache.migrations.tagPrefix);
-        const database = await resolveTextFlag(flags.database, 'database', 'Which database should be migrated?', cache.migrations.database);
+        const database = flags.database ?? migrationDatabaseName;
         const mysqlImage = await resolveOptionalTextFlag(flags['mysql-image'], 'Which MySQL image metadata value should be stored?', cache.migrations.mysqlImage ?? 'docker.io/library/mysql:8.4');
         const base = flags.base ?? await resolveBaseImage(database, tagPrefix, mysqlImage, flags.verbose, catalog);
         const build = await resolveBuildFlag(flags.build, cache.migrations.build);
@@ -45,7 +45,7 @@ export default class MigrationsApply extends BaseCommand {
             verbose: flags.verbose,
             env: buildBackendEnv(context),
         }).catch(error => improveImageConflictError(error, '--tag-prefix'));
-        await writeMigrationChoiceCache(context.rootDir, { database, tagPrefix, build: effectiveBuild, mysqlImage });
+        await writeMigrationChoiceCache(context.rootDir, { tagPrefix, build: effectiveBuild, mysqlImage });
         console.log(`Chain: ${result.chainId}`);
         for (const migration of result.results) {
             console.log(`${migration.status.toUpperCase()} ${formatMigrationLabel(migration.migration.normalizedFile).replace('\n', ' ')} -> ${migration.image}`);
