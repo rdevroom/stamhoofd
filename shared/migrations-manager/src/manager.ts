@@ -65,7 +65,7 @@ export async function runMigrationChain(options: RunMigrationChainOptions): Prom
     const continueOnFailure = options.continueOnFailure ?? false;
     await buildRequiredPackages(rootDir, build, options.verbose ?? false);
 
-    const catalog = await createMigrationCatalog(rootDir);
+    const catalog = options.catalog ?? await createMigrationCatalog(rootDir);
     const changedFiles = options.previousCatalog ? compareCatalogs(options.previousCatalog, catalog) : [];
     if (changedFiles.length > 0 && !allowChangedFiles) {
         throw new Error(`Migration files changed since the previous chain: ${changedFiles.map(file => file.normalizedFile).join(', ')}`);

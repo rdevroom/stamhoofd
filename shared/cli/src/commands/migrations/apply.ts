@@ -1,4 +1,5 @@
-import { createBaseImage, createMigrationCatalog, detectStaleMigrationOutputs, listMigrationImages, runMigrationChain } from '@stamhoofd/migrations-manager';
+import { createBaseImage, createCliContainerRuntime, createMigrationCatalog, detectStaleMigrationOutputs, listMigrationImages, runMigrationChain } from '@stamhoofd/migrations-manager';
+import type { ContainerRuntime } from '@stamhoofd/migrations-manager';
 import { Flags } from '@oclif/core';
 import { BaseCommand } from '../../base-command.js';
 import { buildBackendEnv } from '../../config/build-config.js';
@@ -27,10 +28,11 @@ export default class MigrationsApply extends BaseCommand {
         const context = await this.createContext(flags);
         const cache = await readMigrationChoiceCache(context.rootDir);
         const catalog = await createMigrationCatalog(context.rootDir);
+        const runtime = await createCliContainerRuntime();
         const tagPrefix = await resolveTextFlag(flags['tag-prefix'], 'tag-prefix', 'Which local tag prefix should migration layers use?', cache.migrations.tagPrefix);
         const database = flags.database ?? migrationDatabaseName;
         const mysqlImage = await resolveOptionalTextFlag(flags['mysql-image'], 'Which MySQL image metadata value should be stored?', cache.migrations.mysqlImage ?? 'docker.io/library/mysql:8.4');
-        const base = flags.base ?? await resolveBaseImage(database, tagPrefix, mysqlImage, flags.verbose, catalog);
+        const base = flags.base ?? await resolveBaseImage(database, tagPrefix, mysqlImage, flags.verbose, catalog, runtime);
         const build = await resolveBuildFlag(flags.build, cache.migrations.build);
         const effectiveBuild = await resolveStaleOutputs(context.rootDir, build);
         const result = await runMigrationChain({
@@ -44,6 +46,8 @@ export default class MigrationsApply extends BaseCommand {
             mysqlImage,
             verbose: flags.verbose,
             env: buildBackendEnv(context),
+            runtime,
+            catalog,
         }).catch(error => improveImageConflictError(error, '--tag-prefix'));
         await writeMigrationChoiceCache(context.rootDir, { tagPrefix, build: effectiveBuild, mysqlImage });
         console.log(`Chain: ${result.chainId}`);
@@ -65,13 +69,13 @@ export default class MigrationsApply extends BaseCommand {
     }
 }
 
-async function resolveBaseImage(database: string, tagPrefix: string, mysqlImage: string, verbose: boolean, catalog: Awaited<ReturnType<typeof createMigrationCatalog>>): Promise<string> {
-    const selected = await selectBaseImage(await listMigrationImages(), catalog);
+async function resolveBaseImage(database: string, tagPrefix: string, mysqlImage: string, verbose: boolean, catalog: Awaited<ReturnType<typeof createMigrationCatalog>>, runtime: ContainerRuntime): Promise<string> {
+    const selected = await selectBaseImage(await listMigrationImages({ runtime }), catalog);
     if (selected !== 'create') {
         return imageReference(selected);
     }
     const tag = await resolveTextFlag(undefined, 'tag', 'Which local image tag should be created for the new base database? This is the Docker/Podman image name saved locally. It will be used immediately as --base for this apply run, for example localhost/stamhoofd-migrations/manual:base.', `${tagPrefix}:base`);
-    const result = await createBaseImage({ database, tag, mysqlImage, verbose }).catch(error => improveImageConflictError(error, '--tag'));
+    const result = await createBaseImage({ database, tag, mysqlImage, verbose, runtime }).catch(error => improveImageConflictError(error, '--tag'));
     console.log(`Created base image ${result.image} (${result.imageId})`);
     return result.image;
 }
