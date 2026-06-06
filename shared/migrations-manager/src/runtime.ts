@@ -39,23 +39,32 @@ export class CliContainerRuntime implements ContainerRuntime {
     }
 
     async inspectImage(image: string): Promise<ImageMetadata> {
-        const result = await this.run(['image', 'inspect', image], { allowFailure: true });
-        if (result.status !== 0) {
-            throw new Error(`Image not found: ${image}`);
+        let lastError: unknown;
+        for (let attempt = 0; attempt < 3; attempt++) {
+            const result = await this.run(['image', 'inspect', image], { allowFailure: true });
+            if (result.status !== 0) {
+                throw new Error(`Image not found: ${image}`);
+            }
+            try {
+                const [data] = parseRuntimeJson<Array<{ Id?: string; RepoTags?: string[]; Config?: { Labels?: Record<string, string> } }>>(result.stdout, { command: this.command, args: ['image', 'inspect', image], stderr: result.stderr });
+                return {
+                    id: data.Id ?? image,
+                    repoTags: data.RepoTags ?? [],
+                    labels: data.Config?.Labels ?? {},
+                };
+            } catch (error) {
+                lastError = error;
+                await delay(100 * (attempt + 1));
+            }
         }
-        const [data] = JSON.parse(result.stdout) as Array<{ Id?: string; RepoTags?: string[]; Config?: { Labels?: Record<string, string> } }>;
-        return {
-            id: data.Id ?? image,
-            repoTags: data.RepoTags ?? [],
-            labels: data.Config?.Labels ?? {},
-        };
+        throw lastError;
     }
 
     async listImagesByLabel(label: string): Promise<ImageSummary[]> {
         const format = '{{json .}}';
         const result = await this.run(['images', '--filter', `label=${label}`, '--format', format]);
         return result.stdout.split('\n').filter(Boolean).map((line) => {
-            const data = JSON.parse(line) as { ID?: string; Id?: string; Repository?: string; repository?: string; Tag?: string; tag?: string; CreatedAt?: string; Created?: string | number; Labels?: string | Record<string, string> };
+            const data = parseRuntimeJson<{ ID?: string; Id?: string; Repository?: string; repository?: string; Tag?: string; tag?: string; CreatedAt?: string; Created?: string | number; Labels?: string | Record<string, string> }>(line, { command: this.command, args: ['images', '--filter', `label=${label}`], stderr: result.stderr });
             return {
                 id: data.ID ?? data.Id ?? '',
                 repository: data.Repository ?? data.repository ?? '',
@@ -110,6 +119,25 @@ export async function runCommand(command: string, args: string[], options: RunOp
         }
         child.stdin.end();
     });
+}
+
+export function parseRuntimeJson<T>(stdout: string, context: { command: string; args: string[]; stderr?: string }): T {
+    const trimmed = stdout.trim();
+    const command = [context.command, ...context.args].join(' ');
+    if (!trimmed) {
+        throw new Error(`Could not parse JSON output from ${command}: command returned empty stdout${context.stderr ? `: ${context.stderr.trim()}` : ''}`);
+    }
+    try {
+        return JSON.parse(trimmed) as T;
+    } catch (error) {
+        const preview = trimmed.length > 500 ? `${trimmed.slice(0, 500)}...` : trimmed;
+        const reason = error instanceof Error ? error.message : String(error);
+        throw new Error(`Could not parse JSON output from ${command}: ${reason}. Output: ${preview}${context.stderr ? ` Stderr: ${context.stderr.trim()}` : ''}`);
+    }
+}
+
+function delay(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 export type PipelineCommand = {

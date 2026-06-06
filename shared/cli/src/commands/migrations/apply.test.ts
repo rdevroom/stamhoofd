@@ -49,6 +49,7 @@ describe('MigrationsApply command', () => {
             mysqlImage: 'mysql:8.4',
             verbose: true,
             env: { DB_DATABASE: 'stamhoofd-development' },
+            telemetry: true,
             onProgress: expect.any(Function),
         }));
     });

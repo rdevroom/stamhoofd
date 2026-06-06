@@ -79,7 +79,7 @@ function possibleImageReferences(image: ImageSummary): string[] {
 export async function inspectMigrationImage(options: { image: string; runtime?: ContainerRuntime }): Promise<MigrationImageDetails> {
     const runtime = options.runtime ?? await createCliContainerRuntime();
     const metadata = await runtime.inspectImage(options.image);
-    const container = `stamhoofd-migrations-inspect-${Date.now()}`;
+    const container = `stamhoofd-migrations-inspect-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     let manifest: MigrationImageManifest | undefined;
     let logs: string | undefined;
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'stamhoofd-migrations-inspect-'));

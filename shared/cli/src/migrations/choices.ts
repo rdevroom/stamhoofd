@@ -18,13 +18,14 @@ export function formatChainChoice(chain: MigrationImageOverview, catalog: Migrat
     const next = progress.next ? `${formatMigrationProgress(progress.next.index + 1, progress.total)} ${friendlyMigrationName(progress.next.normalizedFile)}` : '-';
     const last = progress.lastSuccess ? formatImageChoice(progress.lastSuccess, catalog) : '-';
     return padColumns([
-        `${display.primary} ${display.secondary}`,
+        truncateVisible(display.primary, 26),
+        truncateVisible(display.secondary, 20),
         formatStatusIcon(chain.status),
         `${formatMigrationProgress(progress.completed, progress.total)} migrations`,
-        `Last ${last}`,
-        `Next ${next}`,
+        truncateVisible(`Last ${last}`, 74),
+        truncateVisible(`Next ${next}`, 48),
         selectedLast ? chalk.dim('selected last') : '',
-    ], [22, 2, 16, 110, 44, 14]);
+    ], [26, 20, 2, 16, 74, 48, 14]);
 }
 
 export function formatTagPrefixChoice(prefix: string, chains: MigrationImageOverview[], catalog: MigrationCatalogSnapshot): string {

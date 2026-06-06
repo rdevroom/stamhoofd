@@ -52,6 +52,7 @@ export default class MigrationsCreateBase extends BaseCommand {
             mysqlImage,
             verbose: flags.verbose,
             runtime,
+            telemetry: true,
             onProgress: progress.onProgress,
         }).catch(error => improveImageConflictError(error, '--tag')).finally(async () => {
             progress.stop();

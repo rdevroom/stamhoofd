@@ -52,6 +52,7 @@ export default class MigrationsApply extends BaseCommand {
             runtime,
             catalog,
             chainId,
+            telemetry: true,
             onProgress: progress.onProgress,
         }).catch(error => improveImageConflictError(error, '--tag-prefix')).finally(() => progress.stop());
         await writeMigrationChoiceCache(context.rootDir, { tagPrefix, build: effectiveBuild, ...(mysqlImage ? { mysqlImage } : {}) });
@@ -95,7 +96,7 @@ async function resolveBaseImage(rootDir: string, database: string, tagPrefix: st
         return imageReference(selected);
     }
     const tag = await resolveTextFlag(undefined, 'tag', 'Which local image tag should be created for the new base database? This is the Docker/Podman image name saved locally. It will be used immediately as --base for this apply run, for example localhost/stamhoofd-migrations/manual:base.', `${tagPrefix}:base`);
-    const result = await createBaseImage({ rootDir, database, tag, mysqlImage, verbose, runtime }).catch(error => improveImageConflictError(error, '--tag'));
+    const result = await createBaseImage({ rootDir, database, tag, mysqlImage, verbose, runtime, telemetry: true }).catch(error => improveImageConflictError(error, '--tag'));
     console.log(`Created base image ${result.image} (${result.imageId})`);
     return result.image;
 }

@@ -22,6 +22,7 @@ export function createBaseProgressOutput(): BaseProgressOutput {
                 return;
             }
             if (event.type === 'phase:finish') {
+                output.clearStatus();
                 output.log(`DONE ${event.message}`);
                 return;
             }

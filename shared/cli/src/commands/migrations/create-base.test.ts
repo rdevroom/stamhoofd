@@ -67,6 +67,7 @@ describe('MigrationsCreateBase command', () => {
             mysqlImage: 'mysql:8.4',
             verbose: true,
             runtime: expect.any(Object),
+            telemetry: true,
         }));
     });
 

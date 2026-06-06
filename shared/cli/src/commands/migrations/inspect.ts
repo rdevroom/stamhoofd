@@ -130,25 +130,44 @@ async function formatChainOverview(chainId: string, catalog: MigrationCatalogSna
     }
     const progress = createChainProgress(chain, catalog);
     const display = chainDisplayName(chain);
+    const timingDetails = includeTimings ? await inspectTimingDetails(chain) : { details: [], failures: [] };
+    const timingByMigration = new Map(timingDetails.details.map((detail) => {
+        const migration = detail.manifest?.migration?.normalizedFile ?? detail.metadata.labels['be.stamhoofd.migrations.migration'];
+        return migration && typeof detail.manifest?.timings?.totalMs === 'number' ? [migration, detail.manifest.timings.totalMs] as const : undefined;
+    }).filter((item): item is readonly [string, number] => item !== undefined));
     const lines = [
         `Chain ${display.primary}`,
         `${display.secondary}`,
         `${formatStatusColor(chain.status)}, ${formatMigrationProgress(progress.completed, progress.total)} migrations, updated ${formatRelativeTime(progress.latest?.labels['be.stamhoofd.migrations.finished-at'] ?? progress.latest?.createdAt)}`,
         '',
-        ...formatChainGraph(chain, catalog),
+        ...formatChainGraph(chain, catalog, timingByMigration),
     ];
     if (progress.next) {
         lines.push('', 'Next:', `○  ${formatMigrationProgress(progress.next.index + 1, progress.total)}  Not run  ${friendlyMigrationName(progress.next.normalizedFile)}`, `│             ${progress.next.normalizedFile}`);
     }
     if (includeTimings) {
-        lines.push('', await formatTimingSummary(chain));
+        lines.push('', formatTimingSummary(timingDetails));
     }
     return lines.join('\n');
 }
 
-async function formatTimingSummary(chain: MigrationImageOverview): Promise<string> {
+async function inspectTimingDetails(chain: MigrationImageOverview): Promise<{ details: MigrationImageDetails[]; failures: Array<{ image: ImageSummary; error: unknown }> }> {
     const migrationImages = chain.images.filter(image => image.labels['be.stamhoofd.migrations.role'] === 'migration');
-    const details = await Promise.all(migrationImages.map(image => inspectMigrationImage({ image: imageReference(image) })));
+    const inspected = await mapWithConcurrency(migrationImages, 8, async (image) => {
+        try {
+            return { detail: await inspectMigrationImage({ image: imageReference(image) }), image, error: undefined };
+        } catch (error) {
+            return { detail: undefined, image, error };
+        }
+    });
+    return {
+        details: inspected.map(item => item.detail).filter((detail): detail is MigrationImageDetails => detail !== undefined),
+        failures: inspected.filter((item): item is { detail: undefined; image: ImageSummary; error: unknown } => item.error !== undefined).map(({ image, error }) => ({ image, error })),
+    };
+}
+
+function formatTimingSummary(inspected: { details: MigrationImageDetails[]; failures: Array<{ image: ImageSummary; error: unknown }> }): string {
+    const details = inspected.details;
     const timed = details
         .map((detail) => {
             const migration = detail.manifest?.migration?.normalizedFile ?? detail.metadata.labels['be.stamhoofd.migrations.migration'];
@@ -160,7 +179,7 @@ async function formatTimingSummary(chain: MigrationImageOverview): Promise<strin
         .filter((item): item is { migration: string; totalMs: number; phases: MigrationTimingPhase[] } => item !== undefined);
 
     if (timed.length === 0) {
-        return 'Timings: no timing data available in this chain.';
+        return ['Timings: no timing data available in this chain.', formatTimingWarnings(inspected.failures)].filter(Boolean).join('\n');
     }
 
     const phaseTotals = new Map<string, { totalMs: number; count: number }>();
@@ -183,7 +202,31 @@ async function formatTimingSummary(chain: MigrationImageOverview): Promise<strin
     return [
         formatTable(['Phase', 'Total', 'Average', 'Count'], slowestPhases, { title: 'Slowest timing phases' }),
         formatTable(['Migration', 'Total'], slowestMigrations, { title: 'Slowest migrations' }),
-    ].join('\n\n');
+        formatTimingWarnings(inspected.failures),
+    ].filter(Boolean).join('\n\n');
+}
+
+async function mapWithConcurrency<T, R>(items: T[], concurrency: number, run: (item: T) => Promise<R>): Promise<R[]> {
+    const results = new Array<R>(items.length);
+    let index = 0;
+    const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+        while (index < items.length) {
+            const current = index;
+            index++;
+            results[current] = await run(items[current]);
+        }
+    });
+    await Promise.all(workers);
+    return results;
+}
+
+function formatTimingWarnings(failures: Array<{ image: ImageSummary; error: unknown }>): string {
+    if (failures.length === 0) {
+        return '';
+    }
+    const first = failures[0];
+    const reason = first.error instanceof Error ? first.error.message : String(first.error);
+    return `Timing warnings: skipped ${failures.length} image${failures.length === 1 ? '' : 's'} that could not be inspected. First failure: ${imageReference(first.image)}: ${reason}`;
 }
 
 function formatMs(ms: number): string {
@@ -193,7 +236,7 @@ function formatMs(ms: number): string {
     return `${Math.round(ms)}ms`;
 }
 
-function formatChainGraph(chain: MigrationImageOverview, catalog: MigrationCatalogSnapshot): string[] {
+function formatChainGraph(chain: MigrationImageOverview, catalog: MigrationCatalogSnapshot, timings = new Map<string, number>()): string[] {
     const migrationImages = chain.images.filter(image => image.labels['be.stamhoofd.migrations.role'] === 'migration');
     const current = chain.failed ?? chain.latestSuccess;
     const currentIndex = current ? Number(current.labels['be.stamhoofd.migrations.migration-index'] ?? 0) : -1;
@@ -202,7 +245,7 @@ function formatChainGraph(chain: MigrationImageOverview, catalog: MigrationCatal
         const index = Number(image.labels['be.stamhoofd.migrations.migration-index'] ?? -1);
         return index >= start && index <= currentIndex;
     }).reverse();
-    const lines = visible.flatMap((image, visibleIndex) => graphImageLines(image, catalog, visibleIndex === 0));
+    const lines = visible.flatMap((image, visibleIndex) => graphImageLines(image, catalog, visibleIndex === 0, timings));
     if (start > 0) {
         lines.push('│', `○  ...    ${start} earlier migrations hidden`);
     }
@@ -212,12 +255,14 @@ function formatChainGraph(chain: MigrationImageOverview, catalog: MigrationCatal
     return lines.length > 0 ? lines : ['◇  base   Empty database'];
 }
 
-function graphImageLines(image: ImageSummary, catalog: MigrationCatalogSnapshot, current: boolean): string[] {
+function graphImageLines(image: ImageSummary, catalog: MigrationCatalogSnapshot, current: boolean, timings: Map<string, number>): string[] {
     const index = Number(image.labels['be.stamhoofd.migrations.migration-index'] ?? 0);
     const migration = image.labels['be.stamhoofd.migrations.migration'] ?? 'base';
     const marker = current ? '@' : '○';
+    const timing = timings.get(migration);
+    const timingLabel = timing === undefined ? '' : `  ${formatMs(timing)}`;
     return [
-        `${marker}  ${formatMigrationProgress(index + 1, catalog.entries.length)}  ${formatStatusColor(image.labels['be.stamhoofd.migrations.status'] ?? '')}  ${friendlyMigrationName(migration)}`,
+        `${marker}  ${formatMigrationProgress(index + 1, catalog.entries.length)}  ${formatStatusColor(image.labels['be.stamhoofd.migrations.status'] ?? '')}  ${friendlyMigrationName(migration)}${timingLabel}`,
         `│             ${migration}`,
     ];
 }

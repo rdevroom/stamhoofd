@@ -44,6 +44,7 @@ export type RunMigrationChainOptions = {
     runtime?: ContainerRuntime;
     chainId?: string;
     catalog?: MigrationCatalogSnapshot;
+    telemetry?: boolean;
     onProgress?: (event: MigrationProgressEvent) => void;
 };
 
@@ -58,6 +59,7 @@ export type BaseImageOptions = {
     runtime?: ContainerRuntime;
     chainId?: string;
     displayName?: string;
+    telemetry?: boolean;
     onProgress?: (event: BaseImageProgressEvent) => void;
 };
 
@@ -124,6 +126,8 @@ export type BaseImageProgressEvent =
 export type MigrationProgressEvent =
     | { type: 'start'; chainId: string; total: number }
     | { type: 'migration:start'; chainId: string; migration: MigrationCatalogEntry; completed: number; total: number }
+    | { type: 'phase:start'; chainId: string; migration: MigrationCatalogEntry; phase: string; message: string; completed: number; total: number }
+    | { type: 'phase:finish'; chainId: string; migration: MigrationCatalogEntry; phase: string; message: string; completed: number; total: number }
     | { type: 'migration:finish'; chainId: string; result: MigrationExecutionResult; completed: number; total: number }
     | { type: 'done'; chainId: string; completed: number; total: number };
 

@@ -15,6 +15,7 @@ export async function createBaseImage(options: BaseImageOptions): Promise<BaseIm
     const runtime = options.runtime ?? await createCliContainerRuntime();
     const timer = new MigrationTimer();
     const mysqlImage = options.mysqlImage ?? defaultMysqlImage;
+    const telemetry = options.telemetry ?? true;
     const chainId = options.chainId ?? createChainId();
     const catalog = await createMigrationCatalog(rootDir);
     const database = new MysqlImageDatabase(runtime, options.verbose ?? false);
@@ -57,7 +58,7 @@ export async function createBaseImage(options: BaseImageOptions): Promise<BaseIm
             baseMigrationTotal: catalog.entries.length,
             baseLastMigration: baseProgress.last?.normalizedFile,
             baseLastMigrationIndex: baseProgress.last?.index,
-            timings: timer.snapshot(),
+            timings: telemetry ? timer.snapshot() : undefined,
         };
         await database.writeManifest(container, manifest);
         await measureBasePhase(options, timer, 'stop-mysql', 'Stopping MySQL', { container }, () => database.stopForCommit(container));
@@ -83,6 +84,7 @@ export async function runMigrationChain(options: RunMigrationChainOptions): Prom
     const build = options.build ?? 'auto';
     const allowChangedFiles = options.allowChangedFiles ?? false;
     const continueOnFailure = options.continueOnFailure ?? false;
+    const telemetry = options.telemetry ?? true;
     await buildRequiredPackages(rootDir, build, options.verbose ?? false);
 
     const catalog = options.catalog ?? await createMigrationCatalog(rootDir);
@@ -113,10 +115,10 @@ export async function runMigrationChain(options: RunMigrationChainOptions): Prom
         const timer = new MigrationTimer();
         options.onProgress?.({ type: 'migration:start', chainId, migration, completed: results.length, total: migrations.length });
         try {
-            await timer.measure('assert-image-missing', { image: tag }, () => assertImageMissing(runtime, tag));
-            await timer.measure('start-container', { image: parentImage, container, publishPort: true }, () => database.start(parentImage, container, { publishPort: true }));
-            const port = await timer.measure('resolve-mapped-port', { container }, () => database.mappedPort(container));
-            const run = await timer.measure('run-migration', { container, port, migration: migration.normalizedFile }, () => runCommand('node', ['--enable-source-maps', path.join(rootDir, 'backend/app/api/dist/single-migration.js'), '--file', compiledMigrationPath(rootDir, migration), '--name', migration.normalizedFile], {
+            await measureMigrationPhase(options, timer, chainId, migration, results.length, migrations.length, 'assert-image-missing', 'Checking image name', { image: tag }, () => assertImageMissing(runtime, tag));
+            await measureMigrationPhase(options, timer, chainId, migration, results.length, migrations.length, 'start-container', 'Starting MySQL', { image: parentImage, container, publishPort: true }, () => database.start(parentImage, container, { publishPort: true }));
+            const port = await measureMigrationPhase(options, timer, chainId, migration, results.length, migrations.length, 'resolve-mapped-port', 'Resolving MySQL port', { container }, () => database.mappedPort(container));
+            const run = await measureMigrationPhase(options, timer, chainId, migration, results.length, migrations.length, 'run-migration', 'Running migration', { container, port, migration: migration.normalizedFile }, () => runCommand('node', ['--enable-source-maps', path.join(rootDir, 'backend/app/api/dist/single-migration.js'), '--file', compiledMigrationPath(rootDir, migration), '--name', migration.normalizedFile], {
                 cwd: rootDir,
                 allowFailure: true,
                 env: {
@@ -148,7 +150,7 @@ export async function runMigrationChain(options: RunMigrationChainOptions): Prom
             log = [log, error].filter(Boolean).join('\n');
         }
 
-        await timer.measure('prepare-metadata', { container, logBytes: Buffer.byteLength(log) }, () => Promise.resolve());
+        await measureMigrationPhase(options, timer, chainId, migration, results.length, migrations.length, 'prepare-metadata', 'Preparing metadata', { container, logBytes: Buffer.byteLength(log) }, () => Promise.resolve());
         const finishedAt = new Date().toISOString();
         const manifest: MigrationImageManifest = {
             version: 1,
@@ -169,12 +171,12 @@ export async function runMigrationChain(options: RunMigrationChainOptions): Prom
             runtime: runtime.command,
             mysqlImage: options.mysqlImage ?? defaultMysqlImage,
             previousChainId,
-            timings: timer.snapshot(),
+            timings: telemetry ? timer.snapshot() : undefined,
         };
-        await database.writeManifest(container, manifest, { [`${migration.normalizedFile}.log`]: log });
-        await timer.measure('stop-mysql', { container }, () => database.stopForCommit(container));
-        const imageId = await runtime.commit(container, tag, { labels: labelsForManifest(manifest) });
-        await runtime.remove(container);
+        await measureMigrationPhase(options, timer, chainId, migration, results.length, migrations.length, 'write-manifest', 'Writing manifest', { container }, () => database.writeManifest(container, manifest, { [`${migration.normalizedFile}.log`]: log }));
+        await measureMigrationPhase(options, timer, chainId, migration, results.length, migrations.length, 'stop-mysql', 'Stopping MySQL', { container }, () => database.stopForCommit(container));
+        const imageId = await measureMigrationPhase(options, timer, chainId, migration, results.length, migrations.length, 'commit-image', 'Committing image', { container, image: tag }, () => runtime.commit(container, tag, { labels: labelsForManifest(manifest) }));
+        await measureMigrationPhase(options, timer, chainId, migration, results.length, migrations.length, 'remove-container', 'Removing container', { container }, () => runtime.remove(container));
 
         results.push({ migration, status, image: tag, imageId, startedAt, finishedAt, log, error });
         options.onProgress?.({ type: 'migration:finish', chainId, result: results[results.length - 1], completed: results.length, total: migrations.length });
@@ -186,6 +188,15 @@ export async function runMigrationChain(options: RunMigrationChainOptions): Prom
 
     options.onProgress?.({ type: 'done', chainId, completed: results.length, total: migrations.length });
     return { chainId, catalog, changedFiles, results };
+}
+
+async function measureMigrationPhase<T>(options: RunMigrationChainOptions, timer: MigrationTimer, chainId: string, migration: Awaited<ReturnType<typeof createMigrationCatalog>>['entries'][number], completed: number, total: number, phase: string, message: string, data: Record<string, string | number | boolean | null> | undefined, run: () => Promise<T>): Promise<T> {
+    options.onProgress?.({ type: 'phase:start', chainId, migration, phase, message, completed, total });
+    try {
+        return await timer.measure(phase, data, run);
+    } finally {
+        options.onProgress?.({ type: 'phase:finish', chainId, migration, phase, message, completed, total });
+    }
 }
 
 export async function detectStaleMigrationOutputs(rootDir = process.cwd()): Promise<StaleMigrationOutput[]> {
