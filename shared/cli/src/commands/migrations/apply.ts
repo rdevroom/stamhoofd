@@ -1,11 +1,12 @@
 import { createBaseImage, createCliContainerRuntime, createMigrationCatalog, detectStaleMigrationOutputs, listMigrationImages, runMigrationChain } from '@stamhoofd/migrations-manager';
-import type { ContainerRuntime } from '@stamhoofd/migrations-manager';
+import type { ContainerRuntime, MysqlTuningOptions } from '@stamhoofd/migrations-manager';
 import { Flags } from '@oclif/core';
 import { BaseCommand } from '../../base-command.js';
 import { buildBackendEnv } from '../../config/build-config.js';
 import { readMigrationChoiceCache, writeMigrationChoiceCache } from '../../migrations/cache.js';
 import { improveImageConflictError } from '../../migrations/errors.js';
 import { createMigrationProgressOutput } from '../../migrations/live-progress.js';
+import { mysqlTuningFlags, resolveMysqlTuningFlags } from '../../migrations/mysql-tuning.js';
 import { confirmAction, resolveBuildFlag, resolveTagPrefixFlag, resolveTextFlag, selectBaseImage } from '../../migrations/prompts.js';
 import { imageReference, migrationDatabaseName } from '../../migrations/progress.js';
 
@@ -22,6 +23,7 @@ export default class MigrationsApply extends BaseCommand {
         build: Flags.string({ description: 'Build behavior', options: ['auto', 'skip', 'force'] }),
         'mysql-image': Flags.string({ description: 'MySQL image metadata value' }),
         limit: Flags.integer({ description: 'Only apply the first N pending migrations', min: 1 }),
+        ...mysqlTuningFlags,
     };
 
     async run(): Promise<void> {
@@ -34,7 +36,8 @@ export default class MigrationsApply extends BaseCommand {
         const tagPrefix = await resolveTagPrefixFlag(flags['tag-prefix'], chains, catalog, cache.migrations.tagPrefix);
         const database = flags.database ?? migrationDatabaseName;
         const mysqlImage = flags['mysql-image'];
-        const base = flags.base ?? await resolveBaseImage(context.rootDir, database, tagPrefix, mysqlImage, flags.verbose, catalog, runtime, chains);
+        const mysqlTuning = resolveMysqlTuningFlags(flags);
+        const base = flags.base ?? await resolveBaseImage(context.rootDir, database, tagPrefix, mysqlImage, mysqlTuning, flags.verbose, catalog, runtime, chains);
         const build = await resolveBuildFlag(flags.build, cache.migrations.build);
         const effectiveBuild = await resolveStaleOutputs(context.rootDir, build);
         const chainId = await defaultApplyChainId(base, runtime);
@@ -48,6 +51,7 @@ export default class MigrationsApply extends BaseCommand {
             allowChangedFiles: flags['allow-changed-files'],
             build: effectiveBuild,
             mysqlImage,
+            mysqlTuning,
             verbose: flags.verbose,
             env: buildBackendEnv(context),
             runtime,
@@ -104,13 +108,13 @@ function localTimestamp(date = new Date()): string {
     return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}_${pad(date.getMinutes())}_${pad(date.getSeconds())}`;
 }
 
-async function resolveBaseImage(rootDir: string, database: string, tagPrefix: string, mysqlImage: string | undefined, verbose: boolean, catalog: Awaited<ReturnType<typeof createMigrationCatalog>>, runtime: ContainerRuntime, chains: Awaited<ReturnType<typeof listMigrationImages>>): Promise<string> {
+async function resolveBaseImage(rootDir: string, database: string, tagPrefix: string, mysqlImage: string | undefined, mysqlTuning: MysqlTuningOptions, verbose: boolean, catalog: Awaited<ReturnType<typeof createMigrationCatalog>>, runtime: ContainerRuntime, chains: Awaited<ReturnType<typeof listMigrationImages>>): Promise<string> {
     const selected = await selectBaseImage(chains, catalog);
     if (selected !== 'create') {
         return imageReference(selected);
     }
     const tag = await resolveTextFlag(undefined, 'tag', 'Which local image tag should be created for the new base database? This is the Docker/Podman image name saved locally. It will be used immediately as --base for this apply run, for example localhost/stamhoofd-migrations/manual:base.', `${tagPrefix}:base`);
-    const result = await createBaseImage({ rootDir, database, tag, mysqlImage, verbose, runtime, telemetry: true }).catch(error => improveImageConflictError(error, '--tag'));
+    const result = await createBaseImage({ rootDir, database, tag, mysqlImage, mysqlTuning, verbose, runtime, telemetry: true }).catch(error => improveImageConflictError(error, '--tag'));
     console.log(`Created base image ${result.image} (${result.imageId})`);
     return result.image;
 }

@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { runPipeline, type PipelineCommand } from './runtime.js';
-import type { ContainerRuntime, MigrationImageManifest, RunResult } from './types.js';
+import type { ContainerRuntime, MigrationImageManifest, MysqlTuningOptions, RunResult } from './types.js';
 
 const mysqlUser = 'root';
 const mysqlPassword = 'root';
@@ -12,7 +12,7 @@ const mysqlPort = '3306';
 export class MysqlImageDatabase {
     constructor(private readonly runtime: ContainerRuntime, private readonly verbose = false) {}
 
-    async start(image: string, name: string, options: { publishPort?: boolean } = {}): Promise<void> {
+    async start(image: string, name: string, options: { publishPort?: boolean; tuning?: MysqlTuningOptions } = {}): Promise<void> {
         await this.runtime.remove(name);
         const args = [
             'run',
@@ -23,7 +23,7 @@ export class MysqlImageDatabase {
         if (options.publishPort) {
             args.push('-p', '127.0.0.1::3306');
         }
-        args.push(image, '--datadir=/stamhoofd-mysql-data', '--mysql-native-password=ON', '--sort-buffer-size=2M');
+        args.push(image, '--datadir=/stamhoofd-mysql-data', '--mysql-native-password=ON', '--sort-buffer-size=2M', ...mysqlTuningArgs(options.tuning));
         await this.runtime.run(args, { verbose: this.verbose });
         await this.waitForMysql(name);
     }
@@ -46,9 +46,17 @@ export class MysqlImageDatabase {
             ...dumpSourceCommands(dump, options),
             {
                 command: this.runtime.command,
-                args: ['exec', '-i', container, 'mysql', `-h${mysqlHost}`, `-u${mysqlUser}`, `-p${mysqlPassword}`, '--max_allowed_packet=1G', database],
+                args: ['exec', '-i', container, 'mysql', `-h${mysqlHost}`, `-u${mysqlUser}`, `-p${mysqlPassword}`, '--max_allowed_packet=1G', `--init-command=${importInitCommand}`, database],
             },
         ], { verbose: this.verbose });
+    }
+
+    async disableRedoLog(container: string): Promise<void> {
+        await this.execMysql(container, ['-e', 'ALTER INSTANCE DISABLE INNODB REDO_LOG;']);
+    }
+
+    async enableRedoLog(container: string): Promise<void> {
+        await this.execMysql(container, ['-e', 'ALTER INSTANCE ENABLE INNODB REDO_LOG;']);
     }
 
     async listExecutedMigrations(container: string, database: string): Promise<string[]> {
@@ -93,6 +101,31 @@ export class MysqlImageDatabase {
     private async execMysql(container: string, args: string[], options: { allowFailure?: boolean } = {}): Promise<RunResult> {
         return await this.runtime.exec(container, ['mysql', `-h${mysqlHost}`, `-u${mysqlUser}`, `-p${mysqlPassword}`, ...args], options);
     }
+}
+
+const importInitCommand = 'SET SESSION sql_log_bin=0; SET SESSION foreign_key_checks=0; SET SESSION unique_checks=0;';
+
+function mysqlTuningArgs(tuning: MysqlTuningOptions | undefined): string[] {
+    if (!tuning?.unsafe) {
+        return [];
+    }
+
+    return [
+        `--innodb-buffer-pool-size=${tuning.bufferPoolSize}`,
+        `--innodb-redo-log-capacity=${tuning.redoLogCapacity}`,
+        `--innodb-log-buffer-size=${tuning.logBufferSize}`,
+        `--innodb-io-capacity=${tuning.ioCapacity}`,
+        `--innodb-io-capacity-max=${tuning.ioCapacityMax}`,
+        `--innodb-change-buffering=${tuning.changeBuffering}`,
+        `--innodb-change-buffer-max-size=${tuning.changeBufferMaxSize}`,
+        '--innodb-flush-log-at-trx-commit=0',
+        '--sync-binlog=0',
+        '--disable-log-bin',
+        '--skip-innodb-doublewrite',
+        '--innodb-flush-method=O_DIRECT',
+        '--innodb-flush-neighbors=0',
+        '--innodb-autoinc-lock-mode=2',
+    ];
 }
 
 function dumpSourceCommands(dump: string, options: { gpgHome?: string }): PipelineCommand[] {

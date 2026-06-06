@@ -22,7 +22,7 @@ describe('MysqlImageDatabase', () => {
         expect(runPipeline).toHaveBeenCalledWith([
             { command: 'gpg', args: ['--batch', '--decrypt', '/tmp/database.sql.gz.enc'] },
             { command: 'gzip', args: ['-dc'] },
-            { command: 'docker', args: ['exec', '-i', 'base-container', 'mysql', '-h127.0.0.1', '-uroot', '-proot', '--max_allowed_packet=1G', 'stamhoofd_migrations'] },
+            { command: 'docker', args: ['exec', '-i', 'base-container', 'mysql', '-h127.0.0.1', '-uroot', '-proot', '--max_allowed_packet=1G', '--init-command=SET SESSION sql_log_bin=0; SET SESSION foreign_key_checks=0; SET SESSION unique_checks=0;', 'stamhoofd_migrations'] },
         ], { verbose: false });
         expect(runtime.copyToContainer).not.toHaveBeenCalled();
     });
@@ -35,7 +35,7 @@ describe('MysqlImageDatabase', () => {
 
         expect(runPipeline).toHaveBeenCalledWith([
             { command: 'cat', args: ['/tmp/database.sql'] },
-            { command: 'docker', args: ['exec', '-i', 'base-container', 'mysql', '-h127.0.0.1', '-uroot', '-proot', '--max_allowed_packet=1G', 'stamhoofd_migrations'] },
+            { command: 'docker', args: ['exec', '-i', 'base-container', 'mysql', '-h127.0.0.1', '-uroot', '-proot', '--max_allowed_packet=1G', '--init-command=SET SESSION sql_log_bin=0; SET SESSION foreign_key_checks=0; SET SESSION unique_checks=0;', 'stamhoofd_migrations'] },
         ], { verbose: true });
         expect(runtime.copyToContainer).not.toHaveBeenCalled();
     });
@@ -48,8 +48,41 @@ describe('MysqlImageDatabase', () => {
 
         expect(runPipeline).toHaveBeenCalledWith([
             { command: 'gpg', args: ['--homedir', '/tmp/stamhoofd-gpg/gnupg', '--batch', '--decrypt', '/tmp/database.sql.gpg'] },
-            { command: 'docker', args: ['exec', '-i', 'base-container', 'mysql', '-h127.0.0.1', '-uroot', '-proot', '--max_allowed_packet=1G', 'stamhoofd_migrations'] },
+            { command: 'docker', args: ['exec', '-i', 'base-container', 'mysql', '-h127.0.0.1', '-uroot', '-proot', '--max_allowed_packet=1G', '--init-command=SET SESSION sql_log_bin=0; SET SESSION foreign_key_checks=0; SET SESSION unique_checks=0;', 'stamhoofd_migrations'] },
         ], { verbose: false });
+    });
+
+    it('starts MySQL with unsafe tuning options', async () => {
+        const runtime = createRuntime();
+        const database = new MysqlImageDatabase(runtime, false);
+
+        runtime.exec = vi.fn(async () => ({ stdout: '', stderr: '', status: 0 }));
+        await database.start('mysql:8.4', 'base-container', {
+            tuning: {
+                unsafe: true,
+                bufferPoolSize: '8G',
+                redoLogCapacity: '4G',
+                logBufferSize: '256M',
+                ioCapacity: 20000,
+                ioCapacityMax: 40000,
+                changeBuffering: 'all',
+                changeBufferMaxSize: 50,
+            },
+        });
+
+        expect(runtime.run).toHaveBeenCalledWith(expect.arrayContaining([
+            '--innodb-buffer-pool-size=8G',
+            '--innodb-redo-log-capacity=4G',
+            '--innodb-log-buffer-size=256M',
+            '--innodb-io-capacity=20000',
+            '--innodb-io-capacity-max=40000',
+            '--innodb-change-buffering=all',
+            '--innodb-change-buffer-max-size=50',
+            '--innodb-flush-log-at-trx-commit=0',
+            '--sync-binlog=0',
+            '--disable-log-bin',
+            '--skip-innodb-doublewrite',
+        ]), { verbose: false });
     });
 });
 

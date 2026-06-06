@@ -7,6 +7,7 @@ import { checkGzipSupport } from '../../runtime/compression.js';
 import { checkGpgSupport, resolveGpgDecryptOptions } from '../../runtime/gpg.js';
 import { promptFailure } from '../../runtime/ux.js';
 import { readMigrationChoiceCache, writeMigrationChoiceCache } from '../../migrations/cache.js';
+import { mysqlTuningFlags, resolveMysqlTuningFlags } from '../../migrations/mysql-tuning.js';
 import { createBaseProgressOutput } from '../../migrations/base-progress.js';
 import { improveImageConflictError } from '../../migrations/errors.js';
 import { isInteractive, resolveOptionalInputFlag, resolveTextFlag } from '../../migrations/prompts.js';
@@ -21,6 +22,7 @@ export default class MigrationsCreateBase extends BaseCommand {
         database: Flags.string({ description: 'Database name to create and import into', hidden: true }),
         tag: Flags.string({ description: 'Local image tag to create' }),
         'mysql-image': Flags.string({ description: 'MySQL image to use' }),
+        ...mysqlTuningFlags,
     };
 
     async run(): Promise<void> {
@@ -39,6 +41,7 @@ export default class MigrationsCreateBase extends BaseCommand {
             await validateDumpRequirements(dump, context);
         }
         const mysqlImage = flags['mysql-image'];
+        const mysqlTuning = resolveMysqlTuningFlags(flags);
         const chainId = !chains.some(chain => chain.chainId === name) ? name : undefined;
         const decryptOptions = dump && format?.encrypted ? await resolveGpgDecryptOptions({ file: dump, context }) : {};
         const progress = createBaseProgressOutput();
@@ -51,6 +54,7 @@ export default class MigrationsCreateBase extends BaseCommand {
             chainId,
             displayName: name,
             mysqlImage,
+            mysqlTuning,
             verbose: flags.verbose,
             runtime,
             telemetry: true,

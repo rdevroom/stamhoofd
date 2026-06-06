@@ -39,6 +39,7 @@ export type RunMigrationChainOptions = {
     continueOnFailure?: boolean;
     build?: BuildMode;
     mysqlImage?: string;
+    mysqlTuning?: MysqlTuningOptions;
     verbose?: boolean;
     env?: NodeJS.ProcessEnv;
     runtime?: ContainerRuntime;
@@ -56,12 +57,24 @@ export type BaseImageOptions = {
     database: string;
     tag: string;
     mysqlImage?: string;
+    mysqlTuning?: MysqlTuningOptions;
     verbose?: boolean;
     runtime?: ContainerRuntime;
     chainId?: string;
     displayName?: string;
     telemetry?: boolean;
     onProgress?: (event: BaseImageProgressEvent) => void;
+};
+
+export type MysqlTuningOptions = {
+    unsafe: boolean;
+    bufferPoolSize: string;
+    redoLogCapacity: string;
+    logBufferSize: string;
+    ioCapacity: number;
+    ioCapacityMax: number;
+    changeBuffering: 'none' | 'inserts' | 'deletes' | 'changes' | 'purges' | 'all';
+    changeBufferMaxSize: number;
 };
 
 export type BaseImageResult = {

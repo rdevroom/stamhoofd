@@ -26,10 +26,18 @@ export async function createBaseImage(options: BaseImageOptions): Promise<BaseIm
     await measureBasePhase(options, timer, 'assert-image-missing', 'Checking image name', { image: options.tag }, () => assertImageMissing(runtime, options.tag));
 
     try {
-        await measureBasePhase(options, timer, 'start-container', 'Starting MySQL', { image: mysqlImage, container, publishPort: false }, () => database.start(mysqlImage, container));
+        await measureBasePhase(options, timer, 'start-container', 'Starting MySQL', { image: mysqlImage, container, publishPort: false }, () => database.start(mysqlImage, container, { tuning: options.mysqlTuning }));
         await measureBasePhase(options, timer, 'create-database', 'Creating database', { container, database: options.database }, () => database.createDatabase(container, options.database));
         if (dump) {
-            await measureBasePhase(options, timer, 'import-dump', 'Importing database dump', { container, database: options.database, dump }, () => database.importDump(container, dump, options.database, { gpgHome: options.dumpGpgHome }));
+            await measureBasePhase(options, timer, 'import-dump', 'Importing database dump', { container, database: options.database, dump }, async () => {
+                if (options.mysqlTuning?.unsafe) {
+                    await database.disableRedoLog(container);
+                }
+                await database.importDump(container, dump, options.database, { gpgHome: options.dumpGpgHome });
+                if (options.mysqlTuning?.unsafe) {
+                    await database.enableRedoLog(container);
+                }
+            });
         } else {
             timer.skipped('import-dump', { container, database: options.database });
         }
@@ -121,8 +129,11 @@ export async function runMigrationChain(options: RunMigrationChainOptions): Prom
         options.onProgress?.({ type: 'migration:start', chainId, migration, completed: results.length, total: migrations.length });
         try {
             await measureMigrationPhase(options, timer, chainId, migration, results.length, migrations.length, 'assert-image-missing', 'Checking image name', { image: tag }, () => assertImageMissing(runtime, tag));
-            await measureMigrationPhase(options, timer, chainId, migration, results.length, migrations.length, 'start-container', 'Starting MySQL', { image: parentImage, container, publishPort: true }, () => database.start(parentImage, container, { publishPort: true }));
+            await measureMigrationPhase(options, timer, chainId, migration, results.length, migrations.length, 'start-container', 'Starting MySQL', { image: parentImage, container, publishPort: true }, () => database.start(parentImage, container, { publishPort: true, tuning: options.mysqlTuning }));
             const port = await measureMigrationPhase(options, timer, chainId, migration, results.length, migrations.length, 'resolve-mapped-port', 'Resolving MySQL port', { container }, () => database.mappedPort(container));
+            if (options.mysqlTuning?.unsafe) {
+                await measureMigrationPhase(options, timer, chainId, migration, results.length, migrations.length, 'disable-redo-log', 'Disabling redo log', { container }, () => database.disableRedoLog(container));
+            }
             const run = await measureMigrationPhase(options, timer, chainId, migration, results.length, migrations.length, 'run-migration', 'Running migration', { container, port, migration: migration.normalizedFile }, () => runCommand('node', ['--enable-source-maps', path.join(rootDir, 'backend/app/api/dist/single-migration.js'), '--file', compiledMigrationPath(rootDir, migration), '--name', migration.normalizedFile], {
                 cwd: rootDir,
                 allowFailure: true,
@@ -148,6 +159,9 @@ export async function runMigrationChain(options: RunMigrationChainOptions): Prom
             if (run.status !== 0) {
                 status = 'failed';
                 error = log.trim() || `Migration exited with status ${run.status}`;
+            }
+            if (status === 'success' && options.mysqlTuning?.unsafe) {
+                await measureMigrationPhase(options, timer, chainId, migration, results.length, migrations.length, 'enable-redo-log', 'Enabling redo log', { container }, () => database.enableRedoLog(container));
             }
         } catch (e) {
             status = 'failed';

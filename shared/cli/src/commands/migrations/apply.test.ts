@@ -52,7 +52,53 @@ describe('MigrationsApply command', () => {
             verbose: true,
             env: { DB_DATABASE: 'stamhoofd-development' },
             telemetry: true,
+            mysqlTuning: expect.objectContaining({
+                unsafe: true,
+                bufferPoolSize: '8G',
+                redoLogCapacity: '4G',
+            }),
             onProgress: expect.any(Function),
+        }));
+    });
+
+    it('forwards custom MySQL tuning options', async () => {
+        const command = new MigrationsApply([], {} as any);
+        (command as any).parse = vi.fn(async () => ({
+            flags: {
+                env: 'keeo',
+                verbose: false,
+                base: 'stamhoofd-migrations/dev:base',
+                'tag-prefix': 'stamhoofd-migrations/dev',
+                database: 'stamhoofd-development',
+                'continue-on-failure': false,
+                'allow-changed-files': false,
+                build: 'skip',
+                'mysql-image': undefined,
+                'safe-mysql': true,
+                'mysql-buffer-pool-size': '2G',
+                'mysql-redo-log-capacity': '1G',
+                'mysql-log-buffer-size': '128M',
+                'mysql-io-capacity': 1000,
+                'mysql-io-capacity-max': 2000,
+                'mysql-change-buffering': 'none',
+                'mysql-change-buffer-max-size': 10,
+            },
+        }));
+        (command as any).createContext = vi.fn(async () => ({ rootDir: '/repo', env: 'keeo', verbose: false }));
+
+        await command.run();
+
+        expect(runMigrationChain).toHaveBeenCalledWith(expect.objectContaining({
+            mysqlTuning: {
+                unsafe: false,
+                bufferPoolSize: '2G',
+                redoLogCapacity: '1G',
+                logBufferSize: '128M',
+                ioCapacity: 1000,
+                ioCapacityMax: 2000,
+                changeBuffering: 'none',
+                changeBufferMaxSize: 10,
+            },
         }));
     });
 

@@ -10,6 +10,8 @@ const mocks = vi.hoisted(() => ({
         start: vi.fn(async () => undefined),
         createDatabase: vi.fn(async () => undefined),
         importDump: vi.fn(async () => undefined),
+        disableRedoLog: vi.fn(async () => undefined),
+        enableRedoLog: vi.fn(async () => undefined),
         listExecutedMigrations: vi.fn(async () => []),
         writeManifest: vi.fn(async () => undefined),
         stopForCommit: vi.fn(async () => undefined),
@@ -49,6 +51,35 @@ describe('createBaseImage', () => {
         expect(result.dumpSha256).toBe('unknown');
         expect(mocks.database.importDump).toHaveBeenCalledWith(expect.any(String), dump, 'stamhoofd_migrations', { gpgHome: undefined });
         expect(manifest()).toEqual(expect.objectContaining({ dumpSha256: 'unknown' }));
+    });
+
+    it('disables redo logging around unsafe dump imports', async () => {
+        const runtime = createRuntime();
+        const dump = path.join(root, 'database.sql');
+        await fs.writeFile(dump, 'SELECT 1;');
+
+        await createBaseImage({
+            rootDir: root,
+            runtime,
+            dump,
+            database: 'stamhoofd_migrations',
+            tag: 'stamhoofd-migrations/test:base',
+            chainId: 'test-chain',
+            telemetry: false,
+            mysqlTuning: {
+                unsafe: true,
+                bufferPoolSize: '8G',
+                redoLogCapacity: '4G',
+                logBufferSize: '256M',
+                ioCapacity: 20000,
+                ioCapacityMax: 40000,
+                changeBuffering: 'all',
+                changeBufferMaxSize: 50,
+            },
+        });
+
+        expect(mocks.database.disableRedoLog.mock.invocationCallOrder[0]).toBeLessThan(mocks.database.importDump.mock.invocationCallOrder[0]);
+        expect(mocks.database.enableRedoLog.mock.invocationCallOrder[0]).toBeGreaterThan(mocks.database.importDump.mock.invocationCallOrder[0]);
     });
 });
 

@@ -66,9 +66,51 @@ describe('MigrationsCreateBase command', () => {
             displayName: 'stamhoofd-migrations/dev:base',
             onProgress: expect.any(Function),
             mysqlImage: 'mysql:8.4',
+            mysqlTuning: expect.objectContaining({
+                unsafe: true,
+                bufferPoolSize: '8G',
+                redoLogCapacity: '4G',
+            }),
             verbose: true,
             runtime: expect.any(Object),
             telemetry: true,
+        }));
+    });
+
+    it('forwards custom MySQL tuning options', async () => {
+        const command = new MigrationsCreateBase([], {} as any);
+        (command as any).parse = vi.fn(async () => ({
+            flags: {
+                verbose: false,
+                dump: undefined,
+                database: 'stamhoofd-development',
+                tag: 'stamhoofd-migrations/dev:base',
+                'mysql-image': undefined,
+                'safe-mysql': true,
+                'mysql-buffer-pool-size': '2G',
+                'mysql-redo-log-capacity': '1G',
+                'mysql-log-buffer-size': '128M',
+                'mysql-io-capacity': 1000,
+                'mysql-io-capacity-max': 2000,
+                'mysql-change-buffering': 'none',
+                'mysql-change-buffer-max-size': 10,
+            },
+        }));
+        (command as any).createContext = vi.fn(async () => ({ rootDir: '/repo', verbose: false }));
+
+        await command.run();
+
+        expect(createBaseImage).toHaveBeenCalledWith(expect.objectContaining({
+            mysqlTuning: {
+                unsafe: false,
+                bufferPoolSize: '2G',
+                redoLogCapacity: '1G',
+                logBufferSize: '128M',
+                ioCapacity: 1000,
+                ioCapacityMax: 2000,
+                changeBuffering: 'none',
+                changeBufferMaxSize: 10,
+            },
         }));
     });
 
