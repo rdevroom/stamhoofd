@@ -1,8 +1,9 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { scanDumpMetadata } from './dump-metadata.js';
 import { runPipeline, type PipelineCommand } from './runtime.js';
-import type { ContainerRuntime, MigrationImageManifest, MysqlTuningOptions, RunResult } from './types.js';
+import type { ContainerRuntime, ImportDumpProgressEvent, MigrationImageManifest, MysqlTuningOptions, RunResult } from './types.js';
 
 const mysqlUser = 'root';
 const mysqlPassword = 'root';
@@ -41,14 +42,20 @@ export class MysqlImageDatabase {
         await this.execMysql(container, ['-e', `CREATE DATABASE IF NOT EXISTS \`${database}\` DEFAULT CHARACTER SET = \`utf8mb4\` DEFAULT COLLATE = \`utf8mb4_0900_ai_ci\`;`]);
     }
 
-    async importDump(container: string, dump: string, database: string, options: { gpgHome?: string } = {}): Promise<void> {
-        await runPipeline([
-            ...dumpSourceCommands(dump, options),
-            {
-                command: this.runtime.command,
-                args: ['exec', '-i', container, 'mysql', `-h${mysqlHost}`, `-u${mysqlUser}`, `-p${mysqlPassword}`, '--max_allowed_packet=1G', `--init-command=${importInitCommand}`, database],
-            },
-        ], { verbose: this.verbose });
+    async importDump(container: string, dump: string, database: string, options: { gpgHome?: string; onProgress?: (event: ImportDumpProgressEvent) => void } = {}): Promise<void> {
+        const progress = new ImportDumpProgress(this.runtime, container, database, dump, options);
+        await progress.start();
+        try {
+            await runPipeline([
+                ...dumpSourceCommands(dump, options),
+                {
+                    command: this.runtime.command,
+                    args: ['exec', '-i', container, 'mysql', `-h${mysqlHost}`, `-u${mysqlUser}`, `-p${mysqlPassword}`, '--max_allowed_packet=1G', `--init-command=${importInitCommand}`, database],
+                },
+            ], { verbose: this.verbose });
+        } finally {
+            await progress.stop();
+        }
     }
 
     async disableRedoLog(container: string): Promise<void> {
@@ -100,6 +107,135 @@ export class MysqlImageDatabase {
 
     private async execMysql(container: string, args: string[], options: { allowFailure?: boolean } = {}): Promise<RunResult> {
         return await this.runtime.exec(container, ['mysql', `-h${mysqlHost}`, `-u${mysqlUser}`, `-p${mysqlPassword}`, ...args], options);
+    }
+}
+
+class ImportDumpProgress {
+    private readonly abortController = new AbortController();
+    private interval: NodeJS.Timeout | undefined;
+    private baselineReceivedBytes: number | undefined;
+    private latest: ImportDumpProgressEvent = { metadataStatus: 'scanning' };
+    private scanPromise: Promise<void> | undefined;
+    private pollPromise: Promise<void> | undefined;
+    private stopped = false;
+
+    constructor(
+        private readonly runtime: ContainerRuntime,
+        private readonly container: string,
+        private readonly database: string,
+        private readonly dump: string,
+        private readonly options: { gpgHome?: string; onProgress?: (event: ImportDumpProgressEvent) => void },
+    ) {}
+
+    async start(): Promise<void> {
+        this.baselineReceivedBytes = await this.readReceivedBytes().catch(() => undefined);
+        const totalBytes = await this.readExpectedBytes().catch(() => undefined);
+        this.emit({ metadataStatus: 'scanning', totalBytes });
+        this.scanPromise = this.scanMetadata();
+        this.interval = setInterval(() => {
+            this.startPoll();
+        }, 500);
+        this.startPoll();
+    }
+
+    async stop(): Promise<void> {
+        if (this.interval) {
+            clearInterval(this.interval);
+            this.interval = undefined;
+        }
+        await this.pollPromise?.catch(() => undefined);
+        await this.poll().catch(() => undefined);
+        this.stopped = true;
+        this.abortController.abort();
+        await this.scanPromise?.catch(() => undefined);
+    }
+
+    private startPoll(): void {
+        if (this.stopped || this.pollPromise) {
+            return;
+        }
+        this.pollPromise = this.poll().finally(() => {
+            this.pollPromise = undefined;
+        });
+    }
+
+    private async scanMetadata(): Promise<void> {
+        try {
+            const metadata = await scanDumpMetadata(this.dump, { gpgHome: this.options.gpgHome, signal: this.abortController.signal });
+            if (!this.abortController.signal.aborted) {
+                this.emit({ totalTables: metadata.totalTables, metadataStatus: 'done' });
+            }
+        } catch (error) {
+            if (!this.abortController.signal.aborted) {
+                this.emit({ metadataStatus: 'failed' });
+            }
+        }
+    }
+
+    private async poll(): Promise<void> {
+        const [receivedBytes, tableStats] = await Promise.all([
+            this.readReceivedBytes().catch(() => undefined),
+            this.readTableStats().catch(() => undefined),
+        ]);
+        const currentReceivedBytes = receivedBytes !== undefined && this.baselineReceivedBytes !== undefined ? Math.max(0, receivedBytes - this.baselineReceivedBytes) : undefined;
+        this.emitMonotonic({
+            receivedBytes: currentReceivedBytes,
+            createdTables: tableStats?.createdTables,
+            rows: tableStats?.rows,
+        }, ['receivedBytes', 'createdTables', 'rows']);
+    }
+
+    private async readReceivedBytes(): Promise<number> {
+        const result = await this.runtime.exec(this.container, ['mysql', `-h${mysqlHost}`, `-u${mysqlUser}`, `-p${mysqlPassword}`, '-N', '-B', '-e', "SHOW GLOBAL STATUS LIKE 'Bytes_received';"], { allowFailure: true });
+        if (result.status !== 0) {
+            throw new Error(result.stderr || 'Could not read Bytes_received');
+        }
+        const value = Number(result.stdout.trim().split(/\s+/).at(-1));
+        if (!Number.isFinite(value)) {
+            throw new Error('Could not parse Bytes_received');
+        }
+        return value;
+    }
+
+    private async readTableStats(): Promise<{ createdTables: number; rows: number }> {
+        const escapedDatabase = this.database.replace(/'/g, "''");
+        const result = await this.runtime.exec(this.container, ['mysql', `-h${mysqlHost}`, `-u${mysqlUser}`, `-p${mysqlPassword}`, '-N', '-B', '-e', `SELECT COUNT(*), COALESCE(SUM(TABLE_ROWS), 0) FROM information_schema.TABLES WHERE TABLE_SCHEMA = '${escapedDatabase}';`], { allowFailure: true });
+        if (result.status !== 0) {
+            throw new Error(result.stderr || 'Could not read table stats');
+        }
+        const [createdTables, rows] = result.stdout.trim().split(/\s+/).map(value => Number(value));
+        if (![createdTables, rows].every(Number.isFinite)) {
+            throw new Error('Could not parse table stats');
+        }
+        return { createdTables, rows };
+    }
+
+    private async readExpectedBytes(): Promise<number | undefined> {
+        if (!hasDumpExtension(this.dump, ['.sql', '.dump'])) {
+            return undefined;
+        }
+        const stat = await fs.stat(this.dump);
+        return stat.size;
+    }
+
+    private emit(event: ImportDumpProgressEvent): void {
+        if (this.stopped) {
+            return;
+        }
+        this.latest = { ...this.latest, ...event };
+        this.options.onProgress?.(this.latest);
+    }
+
+    private emitMonotonic(event: ImportDumpProgressEvent, keys: Array<keyof ImportDumpProgressEvent>): void {
+        const next = { ...event };
+        for (const key of keys) {
+            const value = next[key];
+            const previous = this.latest[key];
+            if (typeof value === 'number' && typeof previous === 'number') {
+                (next as Record<string, unknown>)[key] = Math.max(previous, value);
+            }
+        }
+        this.emit(next);
     }
 }
 

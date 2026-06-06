@@ -33,7 +33,10 @@ export async function createBaseImage(options: BaseImageOptions): Promise<BaseIm
                 if (options.mysqlTuning?.unsafe) {
                     await database.disableRedoLog(container);
                 }
-                await database.importDump(container, dump, options.database, { gpgHome: options.dumpGpgHome });
+                await database.importDump(container, dump, options.database, {
+                    gpgHome: options.dumpGpgHome,
+                    onProgress: progress => options.onProgress?.({ type: 'import:progress', ...progress }),
+                });
                 if (options.mysqlTuning?.unsafe) {
                     await database.enableRedoLog(container);
                 }

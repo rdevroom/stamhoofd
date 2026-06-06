@@ -49,8 +49,30 @@ describe('createBaseImage', () => {
         });
 
         expect(result.dumpSha256).toBe('unknown');
-        expect(mocks.database.importDump).toHaveBeenCalledWith(expect.any(String), dump, 'stamhoofd_migrations', { gpgHome: undefined });
+        expect(mocks.database.importDump).toHaveBeenCalledWith(expect.any(String), dump, 'stamhoofd_migrations', { gpgHome: undefined, onProgress: expect.any(Function) });
         expect(manifest()).toEqual(expect.objectContaining({ dumpSha256: 'unknown' }));
+    });
+
+    it('forwards import progress events', async () => {
+        const runtime = createRuntime();
+        const dump = path.join(root, 'database.sql');
+        const onProgress = vi.fn();
+        mocks.database.importDump.mockImplementationOnce(async (_container, _dump, _database, options) => {
+            options.onProgress({ totalTables: 57, createdTables: 12 });
+        });
+
+        await createBaseImage({
+            rootDir: root,
+            runtime,
+            dump,
+            database: 'stamhoofd_migrations',
+            tag: 'stamhoofd-migrations/test:base',
+            chainId: 'test-chain',
+            telemetry: false,
+            onProgress,
+        });
+
+        expect(onProgress).toHaveBeenCalledWith({ type: 'import:progress', totalTables: 57, createdTables: 12 });
     });
 
     it('disables redo logging around unsafe dump imports', async () => {

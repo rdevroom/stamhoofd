@@ -153,7 +153,17 @@ export type MigrationImageManifest = {
 export type BaseImageProgressEvent =
     | { type: 'phase:start'; phase: string; message: string }
     | { type: 'phase:finish'; phase: string; message: string }
+    | { type: 'import:progress'; receivedBytes?: number; totalBytes?: number; createdTables?: number; totalTables?: number; rows?: number; metadataStatus?: 'scanning' | 'done' | 'failed' }
     | { type: 'done'; image: string; imageId: string };
+
+export type ImportDumpProgressEvent = {
+    receivedBytes?: number;
+    totalBytes?: number;
+    createdTables?: number;
+    totalTables?: number;
+    rows?: number;
+    metadataStatus?: 'scanning' | 'done' | 'failed';
+};
 
 export type MigrationProgressEvent =
     | { type: 'start'; chainId: string; total: number }
