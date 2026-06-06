@@ -27,10 +27,33 @@ describe('database management commands', () => {
         resetContainerRuntimeCacheForTests();
         vi.mocked(run).mockImplementation(async (_command, args) => {
             if (args[0] === '--version') {
-                return { stdout: 'podman version 5.0.0', stderr: '', status: 0 };
+                if (_command === 'podman') {
+                    return { stdout: 'podman version 5.0.0', stderr: '', status: 0 };
+                }
+                if (_command === 'gzip') {
+                    return { stdout: 'gzip 1.12\n', stderr: '', status: 0 };
+                }
+                if (_command === 'gpg') {
+                    return { stdout: 'gpg (GnuPG) 2.4.0\n', stderr: '', status: 0 };
+                }
             }
             if (args.includes('SHOW DATABASES;')) {
                 return { stdout: 'source-db\nother-db\n', stderr: '', status: 0 };
+            }
+            if (_command === 'gpg' && args[0] === '--list-keys') {
+                return { stdout: 'fpr:::::::::fingerprint-0:\nuid:::::::::Dev <dev@example.com>:', stderr: '', status: 0 };
+            }
+            if (_command === 'op' && args[0] === 'account' && args[1] === 'list') {
+                return { stdout: JSON.stringify([{ email: 'dev@example.com', url: 'stamhoofd.1password.eu' }]), stderr: '', status: 0 };
+            }
+            if (_command === 'op' && args[0] === 'item' && args[1] === 'list') {
+                return { stdout: JSON.stringify([{ id: 'item-1', title: 'Database backup key', category: 'Secure Note', vault: { id: 'vault-1', name: 'Engineering' } }]), stderr: '', status: 0 };
+            }
+            if (_command === 'op' && args[0] === 'item' && args[1] === 'get') {
+                return { stdout: JSON.stringify({ fields: [{ value: '-----BEGIN PGP PUBLIC KEY BLOCK-----\nkey\n-----END PGP PUBLIC KEY BLOCK-----' }] }), stderr: '', status: 0 };
+            }
+            if (_command === 'gpg' && args[0] === '--show-keys') {
+                return { stdout: 'fpr:::::::::imported-fingerprint:\n', stderr: '', status: 0 };
             }
             if (args.some(arg => arg.includes('INFORMATION_SCHEMA.SCHEMATA'))) {
                 return { stdout: '', stderr: '', status: 0 };
@@ -109,6 +132,193 @@ describe('database management commands', () => {
         await command.run();
 
         expect(run).toHaveBeenCalledWith('sh', ['-c', "'podman' exec 'stamhoofd-mysql' mysqldump -h'127.0.0.1' -u'root' -p'root' --single-transaction --quick --routines --triggers --events 'source-db' | gzip -c | gpg --batch --yes --trust-model always --encrypt --recipient 'dev@example.com' > '/tmp/source-db.sql.gz.gpg'"], expect.anything());
+    });
+
+    it('exports with an interactively selected local GPG recipient', async () => {
+        vi.mocked(select).mockResolvedValueOnce('fingerprint-0');
+        const command = createCommand(DbExport, { from: 'source-db', output: '/tmp/source-db.sql.gz.gpg', gzip: true, encrypt: true });
+
+        await command.run();
+
+        expect(select).toHaveBeenCalledWith({
+            message: 'Select the GPG recipient for encryption',
+            choices: [
+                { name: 'Dev <dev@example.com> (local GPG)', value: 'fingerprint-0' },
+                { name: 'Import public key from 1Password', value: '__stamhoofd_import_from_1password__' },
+                { name: 'Enter recipient manually', value: '__stamhoofd_enter_manual_recipient__' },
+            ],
+        });
+        expect(run).toHaveBeenCalledWith('sh', ['-c', "'podman' exec 'stamhoofd-mysql' mysqldump -h'127.0.0.1' -u'root' -p'root' --single-transaction --quick --routines --triggers --events 'source-db' | gzip -c | gpg --batch --yes --trust-model always --encrypt --recipient 'fingerprint-0' > '/tmp/source-db.sql.gz.gpg'"], expect.anything());
+    });
+
+    it('uses STAMHOOFD_DB_EXPORT_GPG_RECIPIENT without prompting', async () => {
+        const previous = process.env.STAMHOOFD_DB_EXPORT_GPG_RECIPIENT;
+        process.env.STAMHOOFD_DB_EXPORT_GPG_RECIPIENT = 'env@example.com';
+        const command = createCommand(DbExport, { from: 'source-db', output: '/tmp/source-db.sql.gz.gpg', gzip: true, encrypt: true });
+
+        try {
+            await command.run();
+        } finally {
+            if (previous === undefined) {
+                delete process.env.STAMHOOFD_DB_EXPORT_GPG_RECIPIENT;
+            } else {
+                process.env.STAMHOOFD_DB_EXPORT_GPG_RECIPIENT = previous;
+            }
+        }
+
+        expect(select).not.toHaveBeenCalled();
+        expect(run).toHaveBeenCalledWith('sh', ['-c', "'podman' exec 'stamhoofd-mysql' mysqldump -h'127.0.0.1' -u'root' -p'root' --single-transaction --quick --routines --triggers --events 'source-db' | gzip -c | gpg --batch --yes --trust-model always --encrypt --recipient 'env@example.com' > '/tmp/source-db.sql.gz.gpg'"], expect.anything());
+    });
+
+    it('imports a searched 1Password public key before exporting', async () => {
+        vi.mocked(select)
+            .mockResolvedValueOnce('__stamhoofd_import_from_1password__')
+            .mockResolvedValueOnce('__stamhoofd_search_all_vaults__')
+            .mockResolvedValueOnce('0');
+        vi.mocked(input).mockResolvedValueOnce('backup');
+        const command = createCommand(DbExport, { from: 'source-db', output: '/tmp/source-db.sql.gz.gpg', gzip: true, encrypt: true });
+
+        await command.run();
+
+        expect(run).toHaveBeenCalledWith('op', ['item', 'list', '--format', 'json', '--account', 'stamhoofd.1password.eu'], { capture: true, allowFailure: true });
+        expect(run).toHaveBeenCalledWith('op', ['item', 'get', 'item-1', '--format', 'json', '--account', 'stamhoofd.1password.eu', '--vault', 'vault-1'], { capture: true });
+        expect(run).toHaveBeenCalledWith('gpg', ['--import', expect.stringContaining('public-key.asc')], { verbose: false });
+        expect(run).toHaveBeenCalledWith('sh', ['-c', "'podman' exec 'stamhoofd-mysql' mysqldump -h'127.0.0.1' -u'root' -p'root' --single-transaction --quick --routines --triggers --events 'source-db' | gzip -c | gpg --batch --yes --trust-model always --encrypt --recipient 'imported-fingerprint' > '/tmp/source-db.sql.gz.gpg'"], expect.anything());
+    });
+
+    it('asks interactively for gzip and encryption when flags are omitted', async () => {
+        vi.mocked(select).mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+        vi.mocked(input).mockResolvedValueOnce('/tmp/manual-name');
+        const command = createCommand(DbExport, { from: 'source-db' });
+
+        await command.run();
+
+        expect(select).toHaveBeenNthCalledWith(1, {
+            message: 'Compress export with gzip?',
+            choices: [
+                { name: 'No', value: false },
+                { name: 'Yes', value: true },
+            ],
+        });
+        expect(select).toHaveBeenNthCalledWith(2, {
+            message: 'Encrypt export with GPG?',
+            choices: [
+                { name: 'No', value: false },
+                { name: 'Yes', value: true },
+            ],
+        });
+        expect(run).toHaveBeenCalledWith('sh', ['-c', "'podman' exec 'stamhoofd-mysql' mysqldump -h'127.0.0.1' -u'root' -p'root' --single-transaction --quick --routines --triggers --events 'source-db' | gzip -c > '/tmp/manual-name.sql.gz'"], expect.anything());
+    });
+
+    it('adds missing extensions to an explicit output path', async () => {
+        const command = createCommand(DbExport, { from: 'source-db', output: '/tmp/backup', gzip: true, encrypt: true, recipient: 'dev@example.com' });
+
+        await command.run();
+
+        expect(run).toHaveBeenCalledWith('sh', ['-c', "'podman' exec 'stamhoofd-mysql' mysqldump -h'127.0.0.1' -u'root' -p'root' --single-transaction --quick --routines --triggers --events 'source-db' | gzip -c | gpg --batch --yes --trust-model always --encrypt --recipient 'dev@example.com' > '/tmp/backup.sql.gz.gpg'"], expect.anything());
+    });
+
+    it('disables interactive gzip when the requirement is missing', async () => {
+        vi.mocked(run).mockImplementation(async (_command, args) => {
+            if (_command === 'gzip' && args[0] === '--version') {
+                return { stdout: '', stderr: 'missing', status: 1 };
+            }
+            if (_command === 'gpg' && args[0] === '--version') {
+                return { stdout: 'gpg (GnuPG) 2.4.0\n', stderr: '', status: 0 };
+            }
+            if (_command === 'gpg' && args[0] === '--list-keys') {
+                return { stdout: 'fpr:::::::::fingerprint-0:\nuid:::::::::Dev <dev@example.com>:', stderr: '', status: 0 };
+            }
+            if (_command === 'podman' && args[0] === '--version') {
+                return { stdout: 'podman version 5.0.0', stderr: '', status: 0 };
+            }
+            if (args.includes('SHOW DATABASES;')) {
+                return { stdout: 'source-db\n', stderr: '', status: 0 };
+            }
+            return undefined;
+        });
+        vi.mocked(select).mockResolvedValueOnce(false).mockResolvedValueOnce(false);
+        vi.mocked(input).mockResolvedValueOnce('/tmp/backup');
+        const command = createCommand(DbExport, { from: 'source-db' });
+
+        await command.run();
+
+        expect(select).toHaveBeenNthCalledWith(1, {
+            message: 'Compress export with gzip?',
+            choices: [
+                { name: 'No', value: false },
+                { name: 'Yes (requirement not met, run `stam setup` for more info.)', value: true, disabled: true },
+            ],
+        });
+    });
+
+    it('fails explicit encryption when the requirement is missing', async () => {
+        vi.mocked(run).mockImplementation(async (_command, args) => {
+            if (_command === 'gzip' && args[0] === '--version') {
+                return { stdout: 'gzip 1.12\n', stderr: '', status: 0 };
+            }
+            if (_command === 'gpg' && args[0] === '--version') {
+                return { stdout: '', stderr: 'missing', status: 1 };
+            }
+            if (_command === 'podman' && args[0] === '--version') {
+                return { stdout: 'podman version 5.0.0', stderr: '', status: 0 };
+            }
+            if (args.includes('SHOW DATABASES;')) {
+                return { stdout: 'source-db\n', stderr: '', status: 0 };
+            }
+            return undefined;
+        });
+        const command = createCommand(DbExport, { from: 'source-db', output: '/tmp/backup', encrypt: true });
+
+        await expect(command.run()).rejects.toThrow('Encrypt export with GPG requirement not met.');
+    });
+
+    it('prompts for the 1Password account when multiple accounts are available', async () => {
+        vi.mocked(run).mockImplementation(async (_command, args) => {
+            if (args[0] === '--version') {
+                if (_command === 'podman') return { stdout: 'podman version 5.0.0', stderr: '', status: 0 };
+                if (_command === 'gzip') return { stdout: 'gzip 1.12\n', stderr: '', status: 0 };
+                if (_command === 'gpg') return { stdout: 'gpg (GnuPG) 2.4.0\n', stderr: '', status: 0 };
+            }
+            if (_command === 'gpg' && args[0] === '--list-keys') {
+                return { stdout: '', stderr: '', status: 0 };
+            }
+            if (_command === 'op' && args[0] === 'account' && args[1] === 'list') {
+                return { stdout: JSON.stringify([{ email: 'work@example.com', url: 'work.1password.eu' }, { email: 'personal@example.com', url: 'personal.1password.com' }]), stderr: '', status: 0 };
+            }
+            if (_command === 'op' && args[0] === 'item' && args[1] === 'list') {
+                return { stdout: JSON.stringify([{ id: 'item-1', title: 'Database backup key', vault: { id: 'vault-1', name: 'Engineering' } }]), stderr: '', status: 0 };
+            }
+            if (_command === 'op' && args[0] === 'item' && args[1] === 'get') {
+                return { stdout: JSON.stringify({ value: '-----BEGIN PGP PUBLIC KEY BLOCK-----\nkey\n-----END PGP PUBLIC KEY BLOCK-----' }), stderr: '', status: 0 };
+            }
+            if (_command === 'gpg' && args[0] === '--show-keys') {
+                return { stdout: 'fpr:::::::::imported-fingerprint:\n', stderr: '', status: 0 };
+            }
+            if (args.includes('SHOW DATABASES;')) {
+                return { stdout: 'source-db\n', stderr: '', status: 0 };
+            }
+            return undefined;
+        });
+        vi.mocked(select)
+            .mockResolvedValueOnce('__stamhoofd_import_from_1password__')
+            .mockResolvedValueOnce('work.1password.eu')
+            .mockResolvedValueOnce('__stamhoofd_search_all_vaults__')
+            .mockResolvedValueOnce('0');
+        vi.mocked(input).mockResolvedValueOnce('backup');
+        const command = createCommand(DbExport, { from: 'source-db', output: '/tmp/source-db.sql.gz.gpg', gzip: true, encrypt: true });
+
+        await command.run();
+
+        expect(select).toHaveBeenCalledWith({
+            message: 'Select a 1Password account',
+            choices: [
+                { name: 'work@example.com (work.1password.eu)', value: 'work.1password.eu' },
+                { name: 'personal@example.com (personal.1password.com)', value: 'personal.1password.com' },
+            ],
+        });
+        expect(run).toHaveBeenCalledWith('op', ['item', 'list', '--format', 'json', '--account', 'work.1password.eu'], { capture: true, allowFailure: true });
+        expect(run).toHaveBeenCalledWith('op', ['item', 'get', 'item-1', '--format', 'json', '--account', 'work.1password.eu', '--vault', 'vault-1'], { capture: true });
     });
 
     it('imports a database export into a forced target', async () => {

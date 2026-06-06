@@ -2,11 +2,14 @@ import fs from 'node:fs/promises';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
+import chalk from 'chalk';
 import { writeSetupCaddyConfig } from '../config/caddy-config.js';
 import { caddyContainer, caddyDataDir, caddyHttpPort, caddyHttpsPort, caddySetupAdminPort, defaultDomain, localIpv4Host, localhostPort } from '../config/shared-service-config.js';
 import { buildSharedServiceProfile, SharedServiceDnsSetupKind, type SharedServiceProfile } from '../config/shared-service-profile.js';
 import type { CliContext } from '../context/create-context.js';
 import { run } from '../runtime/command-runner.js';
+import { checkGzipSupport } from '../runtime/compression.js';
+import { checkGpgEncryptionSupport } from '../runtime/gpg.js';
 import { sharedDir } from '../runtime/manifest-store.js';
 import { CliStatus } from '../runtime/status.js';
 import { command, confirm, statusCell, success, table, Table, type TableCellInput, type TableRow, warning } from '../runtime/ux.js';
@@ -20,6 +23,10 @@ export type SetupReport = {
     caddy: CheckResult;
     dns: CheckResult;
     cert: CheckResult;
+    optional: {
+        gzip: CheckResult;
+        gpg: CheckResult;
+    };
 };
 
 export enum SetupAutomaticFixKey {
@@ -50,6 +57,10 @@ export async function checkSetup(context: CliContext): Promise<SetupReport> {
         caddy: await caddyCheck(),
         dns: await dnsCheck(context, profile),
         cert: await certCheck(),
+        optional: {
+            gzip: await checkGzipSupport(),
+            gpg: await checkGpgEncryptionSupport(context),
+        },
     };
 }
 
@@ -61,11 +72,15 @@ export async function checkSetupWithTable(context: CliContext, options: { live: 
         caddy: Table.row(['Caddy', Table.cell('checking', { indeterminate: true }), '']),
         dns: Table.row([`DNS .${domain}`, Table.cell('checking', { indeterminate: true }), '']),
         cert: Table.row(['Caddy local CA', Table.cell('checking', { indeterminate: true }), '']),
+        optionalSeparator: Table.row(['', '', '']),
+        optionalHeader: Table.row([chalk.bold('Optional'), '', '']),
+        gzip: Table.row(['Gzip database export compression', Table.cell('checking', { indeterminate: true }), '']),
+        gpg: Table.row(['GPG database export encryption', Table.cell('checking', { indeterminate: true }), '']),
     };
     const liveTable = Table.create({
         title: 'Checking Stamhoofd local development setup',
         headers: ['Check', 'Status', 'Details'],
-        rows: [rows.docker, rows.privilegedPorts, rows.caddy, rows.dns, rows.cert],
+        rows: [rows.docker, rows.privilegedPorts, rows.caddy, rows.dns, rows.cert, rows.optionalSeparator, rows.optionalHeader, rows.gzip, rows.gpg],
         live: options.live,
     });
 
@@ -76,6 +91,8 @@ export async function checkSetupWithTable(context: CliContext, options: { live: 
         runSetupCheck(rows.caddy, 'Caddy', caddyCheck()),
         profilePromise.then(profile => runSetupCheck(rows.dns, `DNS .${domain}`, dnsCheck(context, profile))),
         runSetupCheck(rows.cert, 'Caddy local CA', certCheck()),
+        runSetupCheck(rows.gzip, 'Gzip database export compression', checkGzipSupport()),
+        runSetupCheck(rows.gpg, 'GPG database export encryption', checkGpgEncryptionSupport(context)),
     ]);
 
     await liveTable.wait();
@@ -91,6 +108,10 @@ export async function checkSetupWithTable(context: CliContext, options: { live: 
         caddy: results[2].status === 'fulfilled' ? results[2].value : neverRejected(results[2]),
         dns: results[3].status === 'fulfilled' ? results[3].value : neverRejected(results[3]),
         cert: results[4].status === 'fulfilled' ? results[4].value : neverRejected(results[4]),
+        optional: {
+            gzip: results[5].status === 'fulfilled' ? results[5].value : neverRejected(results[5]),
+            gpg: results[6].status === 'fulfilled' ? results[6].value : neverRejected(results[6]),
+        },
     };
 }
 
@@ -101,6 +122,10 @@ export function printSetupReport(report: SetupReport): void {
         row('Caddy', report.caddy),
         row(`DNS .${process.env.STAMHOOFD_DOMAIN ?? defaultDomain}`, report.dns),
         row('Caddy local CA', report.cert),
+        ['', '', ''],
+        [chalk.bold('Optional'), '', ''],
+        row('Gzip database export compression', report.optional.gzip),
+        row('GPG database export encryption', report.optional.gpg),
     ], { title: 'Checking Stamhoofd local development setup' });
 }
 

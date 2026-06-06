@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { select } from '@inquirer/prompts';
+import { input, select } from '@inquirer/prompts';
 import type { CliContext } from '../context/create-context.js';
 import { run } from './command-runner.js';
 
@@ -11,12 +11,39 @@ type GpgChoice = {
     source: 'gpg' | '1password';
 };
 
+type CheckResult = {
+    ok: boolean;
+    details: string;
+    manualFix?: string;
+};
+
+type OnePasswordVault = {
+    id: string;
+    name?: string;
+};
+
+type OnePasswordAccount = {
+    url?: string;
+    email?: string;
+    user_uuid?: string;
+    account_uuid?: string;
+};
+
 type OnePasswordItem = {
     id: string;
     title?: string;
     category?: string;
-    vault?: { name?: string };
+    vault?: { id?: string; name?: string };
 };
+
+const importFromOnePassword = '__stamhoofd_import_from_1password__';
+const enterManualRecipient = '__stamhoofd_enter_manual_recipient__';
+const searchAgain = '__stamhoofd_search_again__';
+const showAllItems = '__stamhoofd_show_all_items__';
+const cancelSelection = '__stamhoofd_cancel_selection__';
+const searchAllVaults = '__stamhoofd_search_all_vaults__';
+const chooseVault = '__stamhoofd_choose_vault__';
+const retryOnePassword = '__stamhoofd_retry_1password__';
 
 export async function resolveGpgRecipient(options: { flag?: string; context: CliContext }): Promise<string> {
     if (options.flag) {
@@ -26,51 +53,52 @@ export async function resolveGpgRecipient(options: { flag?: string; context: Cli
         return process.env.STAMHOOFD_DB_EXPORT_GPG_RECIPIENT;
     }
 
+    const localRecipients = await listLocalGpgRecipients(options.context.verbose);
     const choices = [
-        ...(await listLocalGpgRecipients(options.context.verbose)),
-        ...(await listOnePasswordGpgChoices(options.context.verbose)),
+        ...localRecipients.map(choice => ({ name: choice.name, value: choice.value })),
+        { name: 'Import public key from 1Password', value: importFromOnePassword },
+        { name: 'Enter recipient manually', value: enterManualRecipient },
     ];
 
+    if (localRecipients.length === 0 && !(await onePasswordCliAvailable(options.context.verbose))) {
+        return await promptManualRecipient();
+    }
+
     if (choices.length === 0) {
-        throw new Error('No GPG recipients found. Pass --recipient, set STAMHOOFD_DB_EXPORT_GPG_RECIPIENT, or run stam setup gpg.');
+        throw new Error('No GPG recipients found. Pass --recipient or set STAMHOOFD_DB_EXPORT_GPG_RECIPIENT.');
     }
 
     const selected = await select({
         message: 'Select the GPG recipient for encryption',
-        choices: choices.map(choice => ({ name: choice.name, value: choice.value })),
+        choices,
     });
 
-    const choice = choices.find(candidate => candidate.value === selected);
-    if (choice?.source === '1password') {
-        return await importOnePasswordPublicKey(selected, options.context);
+    if (selected === importFromOnePassword) {
+        return await selectOnePasswordPublicKey(options.context);
+    }
+    if (selected === enterManualRecipient) {
+        return await promptManualRecipient();
     }
 
     return selected;
 }
 
-export async function setupGpg(context: CliContext): Promise<void> {
-    if (context.verbose) {
-        console.log('Checking local GPG installation...');
-    }
-    await run('gpg', ['--version'], { quiet: true });
-    const localRecipients = await listLocalGpgRecipients(context.verbose);
-    if (context.verbose) {
-        console.log(`Local GPG recipients found: ${localRecipients.length}`);
-        console.log('Checking 1Password for GPG/PGP-looking items...');
-    }
-    const choices = await listOnePasswordGpgChoices(context.verbose);
-    if (choices.length === 0) {
-        console.log('GPG is available, but no GPG/PGP-looking items were found in 1Password.');
-        console.log('Set STAMHOOFD_DB_EXPORT_GPG_RECIPIENT or pass --recipient when exporting.');
-        return;
+export async function checkGpgEncryptionSupport(context: CliContext): Promise<CheckResult> {
+    const version = await run('gpg', ['--version'], { capture: true, allowFailure: true });
+    if (version.status !== 0) {
+        return { ok: false, details: 'gpg not found', manualFix: 'Install GPG to use encrypted database exports' };
     }
 
-    const selected = await select({
-        message: 'Select a 1Password GPG public key to import',
-        choices: choices.map(choice => ({ name: choice.name, value: choice.value })),
-    });
-    const recipient = await importOnePasswordPublicKey(selected, context);
-    console.log(`GPG recipient ready: ${recipient}`);
+    const localRecipients = await listLocalGpgRecipients(context.verbose);
+    if (localRecipients.length > 0) {
+        return { ok: true, details: `${localRecipients.length} local recipient${localRecipients.length === 1 ? '' : 's'}` };
+    }
+
+    if (await onePasswordCliAvailable(context.verbose)) {
+        return { ok: true, details: 'no local recipients; 1Password available during export' };
+    }
+
+    return { ok: false, details: 'no local recipients and 1Password unavailable', manualFix: 'Use --recipient or sign in with op account list' };
 }
 
 async function listLocalGpgRecipients(verbose: boolean): Promise<GpgChoice[]> {
@@ -103,50 +131,206 @@ async function listLocalGpgRecipients(verbose: boolean): Promise<GpgChoice[]> {
     return choices;
 }
 
-async function listOnePasswordGpgChoices(verbose: boolean): Promise<GpgChoice[]> {
-    const result = await run('op', ['item', 'list', '--format', 'json'], { capture: true, allowFailure: true });
+async function onePasswordCliAvailable(verbose: boolean): Promise<boolean> {
+    const accounts = await listOnePasswordAccounts(verbose);
+    return accounts.length > 0;
+}
+
+async function listOnePasswordAccounts(verbose: boolean): Promise<OnePasswordAccount[]> {
+    const result = await run('op', ['account', 'list', '--format', 'json'], { capture: true, allowFailure: true });
     if (result.status !== 0) {
         if (verbose) {
-            console.log(`op item list failed with status ${result.status}${result.stderr.trim() ? `: ${result.stderr.trim()}` : ''}`);
+            console.log(`op account list failed with status ${result.status}${result.stderr.trim() ? `: ${result.stderr.trim()}` : ''}`);
             console.log('Make sure the 1Password CLI is installed and signed in: op account list');
         }
         return [];
     }
 
-    let items: OnePasswordItem[];
     try {
-        items = JSON.parse(result.stdout) as OnePasswordItem[];
+        const accounts = JSON.parse(result.stdout) as OnePasswordAccount[];
+        if (verbose) {
+            console.log(`1Password returned ${accounts.length} account${accounts.length === 1 ? '' : 's'}.`);
+        }
+        return accounts;
     }
     catch (error) {
         if (verbose) {
-            console.log(`Could not parse op item list JSON: ${error instanceof Error ? error.message : String(error)}`);
+            console.log(`Could not parse op account list JSON: ${error instanceof Error ? error.message : String(error)}`);
         }
         return [];
     }
-
-    const matches = items.filter(item => /gpg|pgp/i.test(`${item.title ?? ''} ${item.category ?? ''}`));
-    if (verbose) {
-        console.log(`1Password returned ${items.length} item${items.length === 1 ? '' : 's'}.`);
-        console.log(`Items matching /gpg|pgp/i in title or category: ${matches.length}.`);
-        if (matches.length > 0) {
-            for (const item of matches) {
-                console.log(`  - ${item.title ?? item.id}${item.category ? ` [${item.category}]` : ''}${item.vault?.name ? ` in ${item.vault.name}` : ''}`);
-            }
-        }
-        else if (items.length > 0) {
-            console.log('No 1Password item title/category contains "gpg" or "pgp". Rename the item or pass --recipient directly.');
-        }
-    }
-
-    return matches.map(item => ({
-            name: `${item.title ?? item.id}${item.vault?.name ? ` (${item.vault.name} in 1Password)` : ' (1Password)'}`,
-            value: item.id,
-            source: '1password' as const,
-        }));
 }
 
-async function importOnePasswordPublicKey(itemId: string, context: CliContext): Promise<string> {
-    const result = await run('op', ['item', 'get', itemId, '--format', 'json'], { capture: true });
+async function selectOnePasswordAccount(verbose: boolean): Promise<string | undefined> {
+    const accounts = await listOnePasswordAccounts(verbose);
+    if (accounts.length === 0) {
+        throw new Error('No signed-in 1Password accounts found.');
+    }
+    if (accounts.length === 1) {
+        return onePasswordAccountValue(accounts[0]);
+    }
+
+    return await select({
+        message: 'Select a 1Password account',
+        choices: accounts.map(account => ({ name: formatOnePasswordAccount(account), value: onePasswordAccountValue(account) ?? '' })),
+    }) || undefined;
+}
+
+async function listOnePasswordVaults(options: { account?: string; verbose: boolean }): Promise<OnePasswordVault[]> {
+    const result = await run('op', withOnePasswordAccount(['vault', 'list', '--format', 'json'], options.account), { capture: true, allowFailure: true });
+    if (result.status !== 0) {
+        throw new Error(`op vault list failed${result.stderr.trim() ? `: ${result.stderr.trim()}` : ''}`);
+    }
+    try {
+        const vaults = JSON.parse(result.stdout) as OnePasswordVault[];
+        if (options.verbose) {
+            console.log(`1Password returned ${vaults.length} vault${vaults.length === 1 ? '' : 's'}.`);
+        }
+        return vaults;
+    }
+    catch (error) {
+        throw new Error(`Could not parse op vault list JSON: ${error instanceof Error ? error.message : String(error)}`);
+    }
+}
+
+async function listOnePasswordItems(options: { account?: string; vaultId?: string; verbose: boolean }): Promise<OnePasswordItem[]> {
+    const args = ['item', 'list', '--format', 'json'];
+    if (options.account) {
+        args.push('--account', options.account);
+    }
+    if (options.vaultId) {
+        args.push('--vault', options.vaultId);
+    }
+    const result = await run('op', args, { capture: true, allowFailure: true });
+    if (result.status !== 0) {
+        throw new Error(`op item list failed${result.stderr.trim() ? `: ${result.stderr.trim()}` : ''}`);
+    }
+    try {
+        const items = JSON.parse(result.stdout) as OnePasswordItem[];
+        if (options.verbose) {
+            console.log(`1Password returned ${items.length} item${items.length === 1 ? '' : 's'}.`);
+        }
+        return items;
+    }
+    catch (error) {
+        throw new Error(`Could not parse op item list JSON: ${error instanceof Error ? error.message : String(error)}`);
+    }
+}
+
+async function selectOnePasswordPublicKey(context: CliContext): Promise<string> {
+    while (true) {
+        try {
+            const account = await selectOnePasswordAccount(context.verbose);
+            const scope = await select({
+                message: 'Where should Stamhoofd look in 1Password?',
+                choices: [
+                    { name: 'Search all vaults', value: searchAllVaults },
+                    { name: 'Choose a vault first', value: chooseVault },
+                ],
+            });
+            const vaultId = scope === chooseVault ? await selectOnePasswordVault({ account, verbose: context.verbose }) : undefined;
+            const items = await listOnePasswordItems({ account, vaultId, verbose: context.verbose });
+            const item = await searchOnePasswordItems(items);
+            return await importOnePasswordPublicKey(item, context, account);
+        }
+        catch (error) {
+            const action = await select({
+                message: error instanceof Error ? error.message : String(error),
+                choices: [
+                    { name: 'Try again', value: retryOnePassword },
+                    { name: 'Enter recipient manually', value: enterManualRecipient },
+                    { name: 'Cancel export', value: cancelSelection },
+                ],
+            });
+            if (action === enterManualRecipient) {
+                return await promptManualRecipient();
+            }
+            if (action === cancelSelection) {
+                throw new Error('Database export cancelled.');
+            }
+        }
+    }
+}
+
+async function selectOnePasswordVault(options: { account?: string; verbose: boolean }): Promise<string> {
+    const vaults = await listOnePasswordVaults(options);
+    if (vaults.length === 0) {
+        throw new Error('No 1Password vaults found.');
+    }
+    return await select({
+        message: 'Select a 1Password vault',
+        choices: vaults.map(vault => ({ name: vault.name ?? vault.id, value: vault.id })),
+    });
+}
+
+async function searchOnePasswordItems(items: OnePasswordItem[]): Promise<OnePasswordItem> {
+    if (items.length === 0) {
+        throw new Error('No 1Password items found.');
+    }
+
+    let query = '';
+    while (true) {
+        query = await input({ message: 'Search 1Password items by name', default: query });
+        const matches = filterOnePasswordItems(items, query);
+        const selected = await select({
+            message: matches.length === 0 ? `No items matched "${query}".` : `Found ${matches.length} matching item${matches.length === 1 ? '' : 's'}`,
+            choices: [
+                ...matches.map((item, index) => ({ name: formatOnePasswordItem(item), value: String(index) })),
+                { name: 'Search again', value: searchAgain },
+                { name: 'Show all items', value: showAllItems },
+                { name: 'Cancel', value: cancelSelection },
+            ],
+        });
+
+        if (selected === searchAgain) {
+            continue;
+        }
+        if (selected === showAllItems) {
+            query = '';
+            const allSelected = await select({
+                message: 'Select a 1Password item',
+                choices: [
+                    ...items.map((item, index) => ({ name: formatOnePasswordItem(item), value: String(index) })),
+                    { name: 'Search again', value: searchAgain },
+                    { name: 'Cancel', value: cancelSelection },
+                ],
+            });
+            if (allSelected === searchAgain) {
+                continue;
+            }
+            if (allSelected === cancelSelection) {
+                throw new Error('Database export cancelled.');
+            }
+            return items[Number(allSelected)];
+        }
+        if (selected === cancelSelection) {
+            throw new Error('Database export cancelled.');
+        }
+        return matches[Number(selected)];
+    }
+}
+
+function filterOnePasswordItems(items: OnePasswordItem[], query: string): OnePasswordItem[] {
+    const normalized = query.trim().toLowerCase();
+    if (!normalized) {
+        return items;
+    }
+    return items.filter(item => `${item.title ?? ''} ${item.category ?? ''} ${item.vault?.name ?? ''}`.toLowerCase().includes(normalized));
+}
+
+function formatOnePasswordItem(item: OnePasswordItem): string {
+    return `${item.title ?? item.id}${item.vault?.name ? ` (${item.vault.name}${item.category ? `, ${item.category}` : ''})` : item.category ? ` (${item.category})` : ''}`;
+}
+
+async function importOnePasswordPublicKey(item: OnePasswordItem, context: CliContext, account?: string): Promise<string> {
+    const args = ['item', 'get', item.id, '--format', 'json'];
+    if (account) {
+        args.push('--account', account);
+    }
+    if (item.vault?.id) {
+        args.push('--vault', item.vault.id);
+    }
+    const result = await run('op', args, { capture: true });
     const publicKey = findPublicKeyBlock(JSON.parse(result.stdout));
     if (!publicKey) {
         throw new Error('Selected 1Password item does not contain a PGP public key block.');
@@ -157,11 +341,31 @@ async function importOnePasswordPublicKey(itemId: string, context: CliContext): 
     try {
         await fs.writeFile(keyFile, publicKey, { mode: 0o600 });
         await run('gpg', ['--import', keyFile], { verbose: context.verbose });
-        return await fingerprintFromKeyFile(keyFile) || itemId;
+        return await fingerprintFromKeyFile(keyFile) || item.id;
     }
     finally {
         await fs.rm(tempDir, { recursive: true, force: true });
     }
+}
+
+function withOnePasswordAccount(args: string[], account: string | undefined): string[] {
+    return account ? [...args, '--account', account] : args;
+}
+
+function onePasswordAccountValue(account: OnePasswordAccount): string | undefined {
+    return account.url ?? account.account_uuid ?? account.email;
+}
+
+function formatOnePasswordAccount(account: OnePasswordAccount): string {
+    const label = account.email ?? account.user_uuid ?? account.account_uuid ?? account.url ?? '1Password account';
+    return account.url ? `${label} (${account.url})` : label;
+}
+
+async function promptManualRecipient(): Promise<string> {
+    return await input({
+        message: 'Enter GPG recipient email, key id, or fingerprint',
+        validate: value => value.trim() ? true : 'Enter a GPG recipient.',
+    });
 }
 
 async function fingerprintFromKeyFile(keyFile: string): Promise<string> {

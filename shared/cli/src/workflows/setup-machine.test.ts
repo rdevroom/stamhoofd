@@ -94,6 +94,15 @@ describe('setup machine workflow', () => {
         expect(isSetupReady(setupReport({ docker: missingManual('docker missing') }))).toBe(false);
     });
 
+    it('does not let optional checks affect setup readiness or fixes', () => {
+        const report = setupReport({
+            optional: { gzip: ok(), gpg: missingManual('gpg missing') },
+        });
+
+        expect(isSetupReady(report)).toBe(true);
+        expect(getRecommendedSetupFixes(report)).toEqual([]);
+    });
+
     it('recommends DNS setup when local DNS is not configured', async () => {
         mockSetupCommands({
             dns: 'Global: 1.1.1.1\n',
@@ -333,8 +342,36 @@ describe('setup machine workflow', () => {
 
         expect(messages.join('\n')).toContain('Checking Stamhoofd local development setup');
         expect(messages.join('\n')).toContain('Podman / Docker');
+        expect(messages.join('\n')).toContain('Optional');
+        expect(messages.join('\n')).toContain('Gzip database export compression');
+        expect(messages.join('\n')).toContain('GPG database export encryption');
         expect(messages.join('\n')).toContain('ready');
         expect(messages.join('\n')).toContain('127.0.0.1:4080, 127.0.0.1:4443, admin 127.0.0.1:2021');
+    });
+
+    it('reports local GPG recipients as optional encryption support', async () => {
+        mockSetupCommands({
+            dns: 'Global: 127.0.0.1:1053\n',
+            domains: 'Global: ~stamhoofd\n',
+            gpgKeys: 2,
+        });
+
+        const report = await checkSetup({ verbose: false } as any);
+
+        expect(report.optional.gpg).toEqual({ ok: true, details: '2 local recipients' });
+    });
+
+    it('keeps missing GPG support optional', async () => {
+        mockSetupCommands({
+            dns: 'Global: 127.0.0.1:1053\n',
+            domains: 'Global: ~stamhoofd\n',
+            gpgMissing: true,
+        });
+
+        const report = await checkSetup({ verbose: false } as any);
+
+        expect(report.optional.gpg).toMatchObject({ ok: false, details: 'gpg not found' });
+        expect(isSetupReady(report)).toBe(true);
     });
 });
 
@@ -345,6 +382,10 @@ function setupReport(overrides: Partial<SetupReport>): SetupReport {
         caddy: ok(),
         dns: ok(),
         cert: ok(),
+        optional: {
+            gzip: ok(),
+            gpg: ok(),
+        },
         ...overrides,
     };
 }
@@ -361,7 +402,7 @@ function missingAutomatic(key: SetupAutomaticFixKey, label: string): CheckResult
     return { ok: false, details: 'missing', manualFix: `stam setup ${key}`, automaticFix: { key, label } };
 }
 
-function mockSetupCommands(options: { dns?: string; domains?: string; query?: string; resolver?: string; missingRedirects?: boolean; caddyMissing?: boolean }): void {
+function mockSetupCommands(options: { dns?: string; domains?: string; query?: string; resolver?: string; missingRedirects?: boolean; caddyMissing?: boolean; gpgMissing?: boolean; gpgKeys?: number; opMissing?: boolean }): void {
     vi.spyOn(fs, 'readFile').mockImplementation(async (filePath) => {
         if (filePath === '/etc/resolver/stamhoofd') {
             if (options.resolver === undefined) {
@@ -396,6 +437,23 @@ function mockSetupCommands(options: { dns?: string; domains?: string; query?: st
             return options.caddyMissing
                 ? { stdout: '', stderr: 'missing', status: 1 }
                 : { stdout: 'v2.10.2\n', stderr: '', status: 0 };
+        }
+        if (command === 'gpg' && args[0] === '--version') {
+            return options.gpgMissing
+                ? { stdout: '', stderr: 'missing', status: 1 }
+                : { stdout: 'gpg (GnuPG) 2.4.0\n', stderr: '', status: 0 };
+        }
+        if (command === 'gzip' && args[0] === '--version') {
+            return { stdout: 'gzip 1.12\n', stderr: '', status: 0 };
+        }
+        if (command === 'gpg' && args[0] === '--list-keys') {
+            const keys = Array.from({ length: options.gpgKeys ?? 1 }, (_value, index) => `fpr:::::::::fingerprint-${index}:\nuid:::::::::User ${index} <user-${index}@example.com>:`).join('\n');
+            return { stdout: keys, stderr: '', status: 0 };
+        }
+        if (command === 'op' && args[0] === 'account' && args[1] === 'list') {
+            return options.opMissing
+                ? { stdout: '', stderr: 'missing', status: 1 }
+                : { stdout: JSON.stringify([{ email: 'dev@example.com', url: 'stamhoofd.1password.eu' }]), stderr: '', status: 0 };
         }
         if (command === 'resolvectl' && args[0] === 'dns') {
             return { stdout: options.dns ?? '', stderr: '', status: 0 };

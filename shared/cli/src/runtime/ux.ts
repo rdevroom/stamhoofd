@@ -27,6 +27,10 @@ export function failure(message: string): void {
     writeOutputLine(`${chalk.red('✖')} ${message}`, OutputStream.Stderr);
 }
 
+export function promptFailure(message: string): void {
+    writeOutputLine(`${chalk.red('✖')} ${chalk.bold(message)}`, OutputStream.Stderr);
+}
+
 export async function step<T>(message: string, fn: () => Promise<T>, options: { successMessage?: (result: T) => string } = {}): Promise<T> {
     const spinner = ora(message).start();
     try {

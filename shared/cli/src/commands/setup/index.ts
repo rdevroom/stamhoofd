@@ -2,12 +2,10 @@ import { Args } from '@oclif/core';
 import { BaseCommand } from '../../base-command.js';
 import { dryRunFlag, yesFlag } from '../../command-flags.js';
 import { runSetup, setupCert, setupDns } from '../../workflows/setup-machine.js';
-import { setupGpg } from '../../runtime/gpg.js';
 
 export enum SetupAction {
     Cert = 'cert',
     Dns = 'dns',
-    Gpg = 'gpg',
 }
 
 const setupActions = Object.values(SetupAction);
@@ -19,7 +17,6 @@ export default class Setup extends BaseCommand {
         'stam setup',
         'stam setup dns --dry-run',
         'stam setup cert --yes --verbose',
-        'stam setup gpg',
     ];
 
     static args = {
@@ -43,11 +40,6 @@ export default class Setup extends BaseCommand {
 
         if (args.action === SetupAction.Cert) {
             await setupCert(context, { yes: flags.yes, dryRun: flags['dry-run'] });
-            return;
-        }
-
-        if (args.action === SetupAction.Gpg) {
-            await setupGpg(context);
             return;
         }
 

@@ -1,9 +1,11 @@
 import path from 'node:path';
 import { Flags } from '@oclif/core';
-import { confirm, input } from '@inquirer/prompts';
+import { confirm, input, select } from '@inquirer/prompts';
 import { BaseCommand } from '../../base-command.js';
+import { checkGzipSupport } from '../../runtime/compression.js';
 import { currentDatabase, exportDatabase, resolveDatabaseOption } from '../../runtime/database-command-helpers.js';
-import { resolveGpgRecipient } from '../../runtime/gpg.js';
+import { checkGpgEncryptionSupport, resolveGpgRecipient } from '../../runtime/gpg.js';
+import { promptFailure } from '../../runtime/ux.js';
 
 export default class DbExport extends BaseCommand {
     static summary = 'Export a local MySQL database';
@@ -28,9 +30,12 @@ export default class DbExport extends BaseCommand {
         const context = await this.createContext(flags);
         const current = currentDatabase(context);
         const from = await resolveDatabaseOption({ flag: flags.from, message: 'Select the database to export', current, includeCurrent: true });
-        const gzip = flags.gzip || flags.output?.endsWith('.gz') || flags.output?.includes('.gz.') || false;
-        const encrypt = flags.encrypt || flags.output?.endsWith('.gpg') || false;
-        const output = flags.output ?? await input({ message: 'Where should the database export be saved?', default: defaultExportPath(from, gzip, encrypt) });
+        const gzipRequirement = await checkGzipSupport();
+        const gpgRequirement = await checkGpgEncryptionSupport(context);
+        const gzip = await resolveGzipOption({ flag: flags.gzip, output: flags.output, requirementMet: gzipRequirement.ok });
+        const encrypt = await resolveEncryptOption({ flag: flags.encrypt, output: flags.output, requirementMet: gpgRequirement.ok });
+        const rawOutput = flags.output ?? await input({ message: 'Where should the database export be saved?', default: defaultExportPath(from, gzip, encrypt) });
+        const output = normalizeExportPath(rawOutput, gzip, encrypt);
         const recipient = encrypt ? await resolveGpgRecipient({ flag: flags.recipient, context }) : undefined;
 
         if (encrypt && !flags.recipient && !(await confirm({ message: `Encrypt export for ${recipient}?`, default: true }))) {
@@ -44,6 +49,65 @@ export default class DbExport extends BaseCommand {
 
 function defaultExportPath(database: string, gzip: boolean, encrypt: boolean): string {
     const timestamp = new Date().toISOString().replaceAll(/[:.]/g, '-');
-    const extension = `.sql${gzip ? '.gz' : ''}${encrypt ? '.gpg' : ''}`;
-    return path.join(process.cwd(), `${database}-${timestamp}${extension}`);
+    return path.join(process.cwd(), normalizeExportPath(`${database}-${timestamp}`, gzip, encrypt));
+}
+
+async function resolveGzipOption(options: { flag: boolean; output?: string; requirementMet: boolean }): Promise<boolean> {
+    if (options.flag || outputUsesGzip(options.output)) {
+        ensureRequirement(options.requirementMet, 'Compress export with gzip');
+        return true;
+    }
+
+    return await selectBooleanRequirement({
+        message: 'Compress export with gzip?',
+        requirementMet: options.requirementMet,
+        requirementLabel: 'Compress export with gzip',
+    });
+}
+
+async function resolveEncryptOption(options: { flag: boolean; output?: string; requirementMet: boolean }): Promise<boolean> {
+    if (options.flag || outputUsesGpg(options.output)) {
+        ensureRequirement(options.requirementMet, 'Encrypt export with GPG');
+        return true;
+    }
+
+    return await selectBooleanRequirement({
+        message: 'Encrypt export with GPG?',
+        requirementMet: options.requirementMet,
+        requirementLabel: 'Encrypt export with GPG',
+    });
+}
+
+async function selectBooleanRequirement(options: { message: string; requirementMet: boolean; requirementLabel: string }): Promise<boolean> {
+    return await select({
+        message: options.message,
+        choices: [
+            { name: 'No', value: false },
+            options.requirementMet
+                ? { name: 'Yes', value: true }
+                : { name: 'Yes (requirement not met, run `stam setup` for more info.)', value: true, disabled: true } as { name: string; value: boolean; disabled: boolean },
+        ],
+    });
+}
+
+function ensureRequirement(requirementMet: boolean, label: string): void {
+    if (requirementMet) {
+        return;
+    }
+
+    promptFailure(`${label} requirement not met, run \`stam setup\` for more info.`);
+    throw new Error(`${label} requirement not met.`);
+}
+
+function normalizeExportPath(output: string, gzip: boolean, encrypt: boolean): string {
+    const base = output.replace(/(?:\.sql)?(?:\.gz)?(?:\.gpg)?$/i, '');
+    return `${base}.sql${gzip ? '.gz' : ''}${encrypt ? '.gpg' : ''}`;
+}
+
+function outputUsesGzip(output: string | undefined): boolean {
+    return output !== undefined && /(?:\.sql)?\.gz(?:\.gpg)?$/i.test(output);
+}
+
+function outputUsesGpg(output: string | undefined): boolean {
+    return output !== undefined && /\.gpg$/i.test(output);
 }

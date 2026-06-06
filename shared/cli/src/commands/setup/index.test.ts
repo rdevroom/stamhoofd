@@ -49,6 +49,10 @@ describe('Setup command', () => {
         expect(setupCert).toHaveBeenCalledWith({ context: 'setup', verbose: false }, { yes: true, dryRun: true });
         expect(runSetup).not.toHaveBeenCalled();
     });
+
+    it('only exposes direct setup actions that apply fixes', () => {
+        expect(Object.values(SetupAction)).toEqual(['cert', 'dns']);
+    });
 });
 
 function createCommand(parseResult: { args: { action: SetupAction | undefined }; flags: { "yes": boolean; 'dry-run': boolean; "verbose": boolean } }): Setup {
