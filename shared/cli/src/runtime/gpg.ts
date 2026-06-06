@@ -44,6 +44,13 @@ const cancelSelection = '__stamhoofd_cancel_selection__';
 const searchAllVaults = '__stamhoofd_search_all_vaults__';
 const chooseVault = '__stamhoofd_choose_vault__';
 const retryOnePassword = '__stamhoofd_retry_1password__';
+const importPrivateKeyFromOnePassword = '__stamhoofd_import_private_key_from_1password__';
+const retryExistingPrivateKey = '__stamhoofd_retry_existing_private_key__';
+
+export type GpgDecryptOptions = {
+    gpgHome?: string;
+    cleanup?: () => Promise<void>;
+};
 
 export async function resolveGpgRecipient(options: { flag?: string; context: CliContext }): Promise<string> {
     if (options.flag) {
@@ -84,9 +91,9 @@ export async function resolveGpgRecipient(options: { flag?: string; context: Cli
 }
 
 export async function checkGpgEncryptionSupport(context: CliContext): Promise<CheckResult> {
-    const version = await run('gpg', ['--version'], { capture: true, allowFailure: true });
-    if (version.status !== 0) {
-        return { ok: false, details: 'gpg not found', manualFix: 'Install GPG to use encrypted database exports' };
+    const gpg = await checkGpgSupport();
+    if (!gpg.ok) {
+        return gpg;
     }
 
     const localRecipients = await listLocalGpgRecipients(context.verbose);
@@ -99,6 +106,59 @@ export async function checkGpgEncryptionSupport(context: CliContext): Promise<Ch
     }
 
     return { ok: false, details: 'no local recipients and 1Password unavailable', manualFix: 'Use --recipient or sign in with op account list' };
+}
+
+export async function checkGpgSupport(): Promise<CheckResult> {
+    const version = await run('gpg', ['--version'], { capture: true, allowFailure: true });
+    if (version.status !== 0) {
+        return { ok: false, details: 'gpg not found', manualFix: 'Install GPG to use encrypted database exports' };
+    }
+
+    return { ok: true, details: version.stdout.split('\n')[0]?.trim() || 'gpg available' };
+}
+
+export async function resolveGpgDecryptOptions(options: { file: string; context: CliContext }): Promise<GpgDecryptOptions> {
+    const local = await checkGpgDecrypt(options.file, undefined, options.context.verbose);
+    if (local.ok) {
+        return {};
+    }
+    if (!/No secret key/i.test(local.stderr)) {
+        throw new Error(local.stderr.trim() || 'GPG could not decrypt this export.');
+    }
+
+    while (true) {
+        const action = await select({
+            message: `No local private key can decrypt this export${formatMissingSecretKey(local.stderr)}.`,
+            choices: [
+                { name: 'Use a private key from 1Password', value: importPrivateKeyFromOnePassword },
+                { name: 'Retry with existing local GPG key', value: retryExistingPrivateKey },
+                { name: 'Cancel', value: cancelSelection },
+            ],
+        });
+        if (action === retryExistingPrivateKey) {
+            const retry = await checkGpgDecrypt(options.file, undefined, options.context.verbose);
+            if (retry.ok) {
+                return {};
+            }
+            if (!/No secret key/i.test(retry.stderr)) {
+                throw new Error(retry.stderr.trim() || 'GPG could not decrypt this export.');
+            }
+            continue;
+        }
+        if (action === cancelSelection) {
+            throw new Error('Database export import cancelled.');
+        }
+
+        const resolved = await createTemporaryGpgHomeFromOnePasswordPrivateKey(options.context);
+        const retry = await checkGpgDecrypt(options.file, resolved.gpgHome, options.context.verbose);
+        if (retry.ok) {
+            return resolved;
+        }
+        await resolved.cleanup?.();
+        if (!/No secret key/i.test(retry.stderr)) {
+            throw new Error(retry.stderr.trim() || 'GPG could not decrypt this export after importing the private key.');
+        }
+    }
 }
 
 async function listLocalGpgRecipients(verbose: boolean): Promise<GpgChoice[]> {
@@ -220,18 +280,8 @@ async function listOnePasswordItems(options: { account?: string; vaultId?: strin
 async function selectOnePasswordPublicKey(context: CliContext): Promise<string> {
     while (true) {
         try {
-            const account = await selectOnePasswordAccount(context.verbose);
-            const scope = await select({
-                message: 'Where should Stamhoofd look in 1Password?',
-                choices: [
-                    { name: 'Search all vaults', value: searchAllVaults },
-                    { name: 'Choose a vault first', value: chooseVault },
-                ],
-            });
-            const vaultId = scope === chooseVault ? await selectOnePasswordVault({ account, verbose: context.verbose }) : undefined;
-            const items = await listOnePasswordItems({ account, vaultId, verbose: context.verbose });
-            const item = await searchOnePasswordItems(items);
-            return await importOnePasswordPublicKey(item, context, account);
+            const selection = await selectOnePasswordItem(context);
+            return await importOnePasswordPublicKey(selection.item, context, selection.account);
         }
         catch (error) {
             const action = await select({
@@ -250,6 +300,20 @@ async function selectOnePasswordPublicKey(context: CliContext): Promise<string> 
             }
         }
     }
+}
+
+async function selectOnePasswordItem(context: CliContext): Promise<{ account?: string; item: OnePasswordItem }> {
+    const account = await selectOnePasswordAccount(context.verbose);
+    const scope = await select({
+        message: 'Where should Stamhoofd look in 1Password?',
+        choices: [
+            { name: 'Search all vaults', value: searchAllVaults },
+            { name: 'Choose a vault first', value: chooseVault },
+        ],
+    });
+    const vaultId = scope === chooseVault ? await selectOnePasswordVault({ account, verbose: context.verbose }) : undefined;
+    const items = await listOnePasswordItems({ account, vaultId, verbose: context.verbose });
+    return { account, item: await searchOnePasswordItems(items) };
 }
 
 async function selectOnePasswordVault(options: { account?: string; verbose: boolean }): Promise<string> {
@@ -348,6 +412,60 @@ async function importOnePasswordPublicKey(item: OnePasswordItem, context: CliCon
     }
 }
 
+async function createTemporaryGpgHomeFromOnePasswordPrivateKey(context: CliContext): Promise<GpgDecryptOptions> {
+    while (true) {
+        try {
+            const selection = await selectOnePasswordItem(context);
+            return await importOnePasswordPrivateKey(selection.item, context, selection.account);
+        }
+        catch (error) {
+            const action = await select({
+                message: error instanceof Error ? error.message : String(error),
+                choices: [
+                    { name: 'Try again', value: retryOnePassword },
+                    { name: 'Cancel', value: cancelSelection },
+                ],
+            });
+            if (action === cancelSelection) {
+                throw new Error('Database export import cancelled.');
+            }
+        }
+    }
+}
+
+async function importOnePasswordPrivateKey(item: OnePasswordItem, context: CliContext, account?: string): Promise<GpgDecryptOptions> {
+    const args = ['item', 'get', item.id, '--format', 'json'];
+    if (account) {
+        args.push('--account', account);
+    }
+    if (item.vault?.id) {
+        args.push('--vault', item.vault.id);
+    }
+    const result = await run('op', args, { capture: true });
+    const privateKey = findPrivateKeyBlock(JSON.parse(result.stdout));
+    if (!privateKey) {
+        throw new Error('Selected 1Password item does not contain a PGP private key block.');
+    }
+
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'stamhoofd-gpg-'));
+    const gpgHome = path.join(tempDir, 'gnupg');
+    const keyFile = path.join(tempDir, 'private-key.asc');
+    try {
+        await fs.mkdir(gpgHome, { mode: 0o700 });
+        await fs.writeFile(keyFile, privateKey, { mode: 0o600 });
+        await run('gpg', ['--homedir', gpgHome, '--batch', '--import', keyFile], { verbose: context.verbose });
+        await fs.rm(keyFile, { force: true });
+        return {
+            gpgHome,
+            cleanup: async () => await fs.rm(tempDir, { recursive: true, force: true }),
+        };
+    }
+    catch (error) {
+        await fs.rm(tempDir, { recursive: true, force: true });
+        throw error;
+    }
+}
+
 function withOnePasswordAccount(args: string[], account: string | undefined): string[] {
     return account ? [...args, '--account', account] : args;
 }
@@ -376,6 +494,18 @@ async function fingerprintFromKeyFile(keyFile: string): Promise<string> {
     return result.stdout.split('\n').find(line => line.startsWith('fpr:'))?.split(':')[9] ?? '';
 }
 
+async function checkGpgDecrypt(file: string, gpgHome: string | undefined, verbose: boolean): Promise<{ ok: boolean; stderr: string }> {
+    const result = await run('gpg', [...(gpgHome ? ['--homedir', gpgHome] : []), '--batch', '--decrypt', '--output', os.devNull, file], { capture: true, allowFailure: true, verbose });
+    return { ok: result.status === 0, stderr: result.stderr };
+}
+
+function formatMissingSecretKey(stderr: string): string {
+    const key = stderr.split('\n').find(line => /encrypted with/i.test(line))?.trim();
+    const user = stderr.split('\n').find(line => line.trim().startsWith('"'))?.trim();
+    const details = [key, user].filter(Boolean).join(' ');
+    return details ? ` (${details})` : '';
+}
+
 function findPublicKeyBlock(value: unknown): string {
     if (typeof value === 'string') {
         const match = value.match(/-----BEGIN PGP PUBLIC KEY BLOCK-----[\s\S]+?-----END PGP PUBLIC KEY BLOCK-----/);
@@ -392,6 +522,30 @@ function findPublicKeyBlock(value: unknown): string {
     if (value && typeof value === 'object') {
         for (const item of Object.values(value)) {
             const result = findPublicKeyBlock(item);
+            if (result) {
+                return result;
+            }
+        }
+    }
+    return '';
+}
+
+function findPrivateKeyBlock(value: unknown): string {
+    if (typeof value === 'string') {
+        const match = value.match(/-----BEGIN PGP PRIVATE KEY BLOCK-----[\s\S]+?-----END PGP PRIVATE KEY BLOCK-----/);
+        return match?.[0] ?? '';
+    }
+    if (Array.isArray(value)) {
+        for (const item of value) {
+            const result = findPrivateKeyBlock(item);
+            if (result) {
+                return result;
+            }
+        }
+    }
+    if (value && typeof value === 'object') {
+        for (const item of Object.values(value)) {
+            const result = findPrivateKeyBlock(item);
             if (result) {
                 return result;
             }

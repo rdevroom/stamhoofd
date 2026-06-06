@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { runPipeline, type PipelineCommand } from './runtime.js';
 import type { ContainerRuntime, MigrationImageManifest, RunResult } from './types.js';
 
 const mysqlUser = 'root';
@@ -40,14 +41,14 @@ export class MysqlImageDatabase {
         await this.execMysql(container, ['-e', `CREATE DATABASE IF NOT EXISTS \`${database}\` DEFAULT CHARACTER SET = \`utf8mb4\` DEFAULT COLLATE = \`utf8mb4_0900_ai_ci\`;`]);
     }
 
-    async importDump(container: string, dump: string, database: string): Promise<void> {
-        const extension = path.extname(dump);
-        if (extension !== '.dump' && extension !== '.sql') {
-            throw new Error(`Unsupported dump extension: ${extension}. Only .dump and .sql are supported.`);
-        }
-        await this.runtime.exec(container, ['mkdir', '-p', '/stamhoofd']);
-        await this.runtime.copyToContainer(dump, container, '/stamhoofd/import.dump');
-        await this.runtime.exec(container, ['sh', '-lc', `mysql -h${mysqlHost} -u${mysqlUser} -p${mysqlPassword} --max_allowed_packet=1G ${shellQuote(database)} < /stamhoofd/import.dump`]);
+    async importDump(container: string, dump: string, database: string, options: { gpgHome?: string } = {}): Promise<void> {
+        await runPipeline([
+            ...dumpSourceCommands(dump, options),
+            {
+                command: this.runtime.command,
+                args: ['exec', '-i', container, 'mysql', `-h${mysqlHost}`, `-u${mysqlUser}`, `-p${mysqlPassword}`, '--max_allowed_packet=1G', database],
+            },
+        ], { verbose: this.verbose });
     }
 
     async listExecutedMigrations(container: string, database: string): Promise<string[]> {
@@ -94,6 +95,23 @@ export class MysqlImageDatabase {
     }
 }
 
-function shellQuote(value: string): string {
-    return `'${value.replaceAll('\'', '\'"\'"\'')}'`;
+function dumpSourceCommands(dump: string, options: { gpgHome?: string }): PipelineCommand[] {
+    const gpgArgs = [...(options.gpgHome ? ['--homedir', options.gpgHome] : []), '--batch', '--decrypt', dump];
+    if (dump.endsWith('.sql.gz.gpg') || dump.endsWith('.dump.gz.gpg')) {
+        return [
+            { command: 'gpg', args: gpgArgs },
+            { command: 'gzip', args: ['-dc'] },
+        ];
+    }
+    if (dump.endsWith('.sql.gpg') || dump.endsWith('.dump.gpg')) {
+        return [{ command: 'gpg', args: gpgArgs }];
+    }
+    if (dump.endsWith('.sql.gz') || dump.endsWith('.dump.gz')) {
+        return [{ command: 'gzip', args: ['-dc', dump] }];
+    }
+    if (dump.endsWith('.sql') || dump.endsWith('.dump')) {
+        return [{ command: 'cat', args: [dump] }];
+    }
+
+    throw new Error(`Unsupported dump extension. Supported formats are .sql, .sql.gz, .sql.gpg, and .sql.gz.gpg.`);
 }

@@ -50,6 +50,7 @@ export type RunMigrationChainOptions = {
 export type BaseImageOptions = {
     rootDir?: string;
     dump?: string;
+    dumpGpgHome?: string;
     database: string;
     tag: string;
     mysqlImage?: string;

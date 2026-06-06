@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { pipeline } from 'node:stream/promises';
 import type { CommitOptions, ContainerRuntime, ImageMetadata, ImageSummary, RunOptions, RunResult } from './types.js';
 
 export async function createCliContainerRuntime(): Promise<ContainerRuntime> {
@@ -109,6 +110,51 @@ export async function runCommand(command: string, args: string[], options: RunOp
         }
         child.stdin.end();
     });
+}
+
+export type PipelineCommand = {
+    command: string;
+    args: string[];
+};
+
+export async function runPipeline(commands: PipelineCommand[], options: { verbose?: boolean } = {}): Promise<void> {
+    if (commands.length === 0) {
+        return;
+    }
+    if (options.verbose) {
+        console.log(commands.map(({ command, args }) => [command, ...args].join(' ')).join(' | '));
+    }
+
+    const children = commands.map(({ command, args }) => {
+        const child = spawn(command, args, { stdio: ['pipe', 'pipe', 'pipe'] });
+        let stderr = '';
+        child.stderr.on('data', chunk => stderr += String(chunk));
+        return { command, args, child, stderr: () => stderr };
+    });
+
+    for (let index = 0; index < children.length - 1; index++) {
+        void pipeline(children[index].child.stdout, children[index + 1].child.stdin).catch(() => {
+            // Exit-code checks below report the command that actually failed.
+        });
+    }
+    children[0].child.stdin.end();
+    const last = children[children.length - 1];
+    last.child.stdout.resume();
+    last.child.stdin.on('error', () => {
+        // Broken pipes are expected when an earlier stage fails.
+    });
+
+    const results = await Promise.all(children.map(({ child }) => new Promise<number | null>((resolve, reject) => {
+        child.on('error', reject);
+        child.on('exit', resolve);
+    })));
+
+    const failedIndex = results.findIndex(status => status !== 0);
+    if (failedIndex !== -1) {
+        const failed = children[failedIndex];
+        const stderr = failed.stderr().trim();
+        throw new Error(`${failed.command} ${failed.args.join(' ')} exited with status ${results[failedIndex]}${stderr ? `: ${stderr}` : ''}`);
+    }
 }
 
 function parseDockerLabels(labels: string | Record<string, string>): Record<string, string> {

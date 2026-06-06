@@ -28,7 +28,7 @@ export async function createBaseImage(options: BaseImageOptions): Promise<BaseIm
         await measureBasePhase(options, timer, 'start-container', 'Starting MySQL', { image: mysqlImage, container, publishPort: false }, () => database.start(mysqlImage, container));
         await measureBasePhase(options, timer, 'create-database', 'Creating database', { container, database: options.database }, () => database.createDatabase(container, options.database));
         if (dump) {
-            await measureBasePhase(options, timer, 'import-dump', 'Importing database dump', { container, database: options.database, dump }, () => database.importDump(container, dump, options.database));
+            await measureBasePhase(options, timer, 'import-dump', 'Importing database dump', { container, database: options.database, dump }, () => database.importDump(container, dump, options.database, { gpgHome: options.dumpGpgHome }));
         } else {
             timer.skipped('import-dump', { container, database: options.database });
         }

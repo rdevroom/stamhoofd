@@ -1,18 +1,22 @@
 import { createBaseImage, createCliContainerRuntime, listMigrationImages } from '@stamhoofd/migrations-manager';
 import { Flags } from '@oclif/core';
+import { select } from '@inquirer/prompts';
 import { BaseCommand } from '../../base-command.js';
+import { checkGzipSupport } from '../../runtime/compression.js';
+import { checkGpgSupport, resolveGpgDecryptOptions } from '../../runtime/gpg.js';
+import { promptFailure } from '../../runtime/ux.js';
 import { readMigrationChoiceCache, writeMigrationChoiceCache } from '../../migrations/cache.js';
 import { createBaseProgressOutput } from '../../migrations/base-progress.js';
 import { improveImageConflictError } from '../../migrations/errors.js';
-import { resolveOptionalInputFlag, resolveTextFlag } from '../../migrations/prompts.js';
+import { isInteractive, resolveOptionalInputFlag, resolveTextFlag } from '../../migrations/prompts.js';
 import { migrationDatabaseName } from '../../migrations/progress.js';
 
 export default class MigrationsCreateBase extends BaseCommand {
-    static summary = 'Create a base database image from a plain dump';
+    static summary = 'Create a base database image from a database export';
 
     static flags = {
         ...BaseCommand.verboseFlags,
-        dump: Flags.string({ description: 'Path to a .dump or .sql file. Omit to create an empty database base image.' }),
+        dump: Flags.string({ description: 'Path to a .sql, .sql.gz, .sql.gpg, or .sql.gz.gpg file. Omit to create an empty database base image.' }),
         database: Flags.string({ description: 'Database name to create and import into', hidden: true }),
         tag: Flags.string({ description: 'Local image tag to create' }),
         'mysql-image': Flags.string({ description: 'MySQL image to use' }),
@@ -28,13 +32,19 @@ export default class MigrationsCreateBase extends BaseCommand {
         printExplanation();
         const name = await resolveTextFlag(flags.tag, 'tag', 'Which name should this migration base use?', defaultBaseName());
         const tag = imageReferenceFromName(name);
-        const dump = await resolveOptionalInputFlag(flags.dump, 'Which database dump should be imported? Leave empty to create an empty base image.');
+        const dump = await resolveBaseDump(flags.dump);
+        const format = dump ? dumpFormat(dump) : undefined;
+        if (dump) {
+            await validateDumpRequirements(dump, context);
+        }
         const mysqlImage = flags['mysql-image'];
         const chainId = !chains.some(chain => chain.chainId === name) ? name : undefined;
+        const decryptOptions = dump && format?.encrypted ? await resolveGpgDecryptOptions({ file: dump, context }) : {};
         const progress = createBaseProgressOutput();
         const result = await createBaseImage({
             rootDir: context.rootDir,
             dump,
+            dumpGpgHome: decryptOptions.gpgHome,
             database,
             tag,
             chainId,
@@ -43,7 +53,10 @@ export default class MigrationsCreateBase extends BaseCommand {
             verbose: flags.verbose,
             runtime,
             onProgress: progress.onProgress,
-        }).catch(error => improveImageConflictError(error, '--tag')).finally(() => progress.stop());
+        }).catch(error => improveImageConflictError(error, '--tag')).finally(async () => {
+            progress.stop();
+            await decryptOptions.cleanup?.();
+        });
         const tagPrefix = tagPrefixFromTag(tag);
         await writeMigrationChoiceCache(context.rootDir, { ...(mysqlImage ? { mysqlImage } : {}), tagPrefix });
         console.log(`Chain: ${result.chainId}`);
@@ -56,6 +69,76 @@ export default class MigrationsCreateBase extends BaseCommand {
         console.log(`Detected applied migrations: ${result.manifest.baseMigrationCount ?? 0}/${result.manifest.baseMigrationTotal ?? 0}`);
         console.log('\nNext step:');
         console.log(`  yarn stam migrations apply --base ${result.image} --tag-prefix ${tagPrefix}`);
+    }
+}
+
+const importDatabaseExport = '__stamhoofd_import_database_export__';
+const emptyDatabase = '__stamhoofd_empty_database__';
+
+async function resolveBaseDump(flag: string | undefined): Promise<string | undefined> {
+    if (flag) {
+        return flag;
+    }
+    if (!isInteractive()) {
+        return undefined;
+    }
+
+    const source = await select({
+        message: 'What should this base image contain?',
+        choices: [
+            { name: 'Import a database export', value: importDatabaseExport },
+            { name: 'Create an empty database', value: emptyDatabase },
+        ],
+    });
+    if (source === emptyDatabase) {
+        return undefined;
+    }
+
+    return await resolveOptionalInputFlag(undefined, 'Which database export should be imported?');
+}
+
+async function validateDumpRequirements(dump: string, context: { verbose: boolean }): Promise<void> {
+    const format = dumpFormat(dump);
+    printDumpFormat(format);
+
+    if (format.encrypted) {
+        const gpg = await checkGpgSupport();
+        if (!gpg.ok) {
+            promptFailure('GPG database export encryption requirement not met, run `stam setup` for more info.');
+            throw new Error('GPG database export encryption requirement not met.');
+        }
+        if (context.verbose) {
+            console.log('GPG is available. Encrypted imports may ask for a private key before importing.');
+        }
+    }
+
+    if (format.compressed) {
+        const gzip = await checkGzipSupport();
+        if (!gzip.ok) {
+            promptFailure('Gzip database export compression requirement not met, run `stam setup` for more info.');
+            throw new Error('Gzip database export compression requirement not met.');
+        }
+    }
+}
+
+function dumpFormat(dump: string): { compressed: boolean; encrypted: boolean } {
+    return {
+        compressed: /(?:\.sql|\.dump)\.gz(?:\.gpg)?$/i.test(dump),
+        encrypted: /(?:\.sql|\.dump)(?:\.gz)?\.gpg$/i.test(dump),
+    };
+}
+
+function printDumpFormat(format: { compressed: boolean; encrypted: boolean }): void {
+    console.log('\nDetected export format:');
+    if (!format.compressed && !format.encrypted) {
+        console.log('✓ plain SQL');
+        return;
+    }
+    if (format.encrypted) {
+        console.log('✓ encrypted with GPG');
+    }
+    if (format.compressed) {
+        console.log('✓ compressed with gzip');
     }
 }
 
