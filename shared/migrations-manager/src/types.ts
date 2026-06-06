@@ -44,6 +44,7 @@ export type RunMigrationChainOptions = {
     runtime?: ContainerRuntime;
     chainId?: string;
     catalog?: MigrationCatalogSnapshot;
+    limit?: number;
     telemetry?: boolean;
     onProgress?: (event: MigrationProgressEvent) => void;
 };
@@ -87,6 +88,24 @@ export type MigrationChainResult = {
     catalog: MigrationCatalogSnapshot;
     changedFiles: ChangedMigrationFile[];
     results: MigrationExecutionResult[];
+    timings?: MigrationChainTimings;
+};
+
+export type MigrationChainTimings = {
+    totalMs: number;
+    measuredPhaseMs: number;
+    unaccountedMs: number;
+    migrations: Array<{
+        migration: string;
+        image: string;
+        status: 'success' | 'failed';
+        timings: MigrationTimings;
+    }>;
+    phaseTotals: Array<{
+        name: string;
+        totalMs: number;
+        count: number;
+    }>;
 };
 
 export type MigrationImageManifest = {

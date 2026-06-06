@@ -21,6 +21,7 @@ export default class MigrationsApply extends BaseCommand {
         'allow-changed-files': Flags.boolean({ description: 'Allow changed migration files', default: false }),
         build: Flags.string({ description: 'Build behavior', options: ['auto', 'skip', 'force'] }),
         'mysql-image': Flags.string({ description: 'MySQL image metadata value' }),
+        limit: Flags.integer({ description: 'Only apply the first N pending migrations', min: 1 }),
     };
 
     async run(): Promise<void> {
@@ -52,6 +53,7 @@ export default class MigrationsApply extends BaseCommand {
             runtime,
             catalog,
             chainId,
+            limit: flags.limit,
             telemetry: true,
             onProgress: progress.onProgress,
         }).catch(error => improveImageConflictError(error, '--tag-prefix')).finally(() => progress.stop());
@@ -69,7 +71,19 @@ export default class MigrationsApply extends BaseCommand {
                 console.log(`  yarn stam migrations inspect --image ${latest.image}`);
             }
         }
+        if (result.timings) {
+            console.log(`\nTiming: ${formatSeconds(result.timings.totalMs)} total, ${formatSeconds(result.timings.unaccountedMs)} unaccounted, slowest phase ${formatSlowestPhase(result.timings.phaseTotals)}`);
+        }
     }
+}
+
+function formatSeconds(ms: number): string {
+    return `${(ms / 1000).toFixed(2)}s`;
+}
+
+function formatSlowestPhase(phases: NonNullable<Awaited<ReturnType<typeof runMigrationChain>>['timings']>['phaseTotals']): string {
+    const phase = phases[0];
+    return phase ? `${phase.name} ${formatSeconds(phase.totalMs)}` : '-';
 }
 
 async function defaultApplyChainId(base: string, runtime: ContainerRuntime): Promise<string | undefined> {

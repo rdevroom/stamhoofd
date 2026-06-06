@@ -1,8 +1,8 @@
-import type { MigrationImageManifest } from './types.js';
+import type { MigrationImageManifest, MigrationTimingPhase, MigrationTimings } from './types.js';
 
 export const migrationLabel = 'be.stamhoofd.migrations';
 
-export function labelsForManifest(manifest: MigrationImageManifest): Record<string, string> {
+export function labelsForManifest(manifest: MigrationImageManifest, timings: MigrationTimings | undefined = manifest.timings): Record<string, string> {
     return compactLabels({
         [migrationLabel]: 'true',
         'be.stamhoofd.migrations.chain': manifest.chainId,
@@ -25,7 +25,46 @@ export function labelsForManifest(manifest: MigrationImageManifest): Record<stri
         'be.stamhoofd.migrations.git-revision': manifest.catalog?.gitRevision,
         'be.stamhoofd.migrations.started-at': manifest.startedAt,
         'be.stamhoofd.migrations.finished-at': manifest.finishedAt,
+        ...labelsForTimings(timings),
     });
+}
+
+export function timingsFromLabels(labels: Record<string, string>): MigrationTimings | undefined {
+    const totalMs = numberLabel(labels['be.stamhoofd.migrations.duration-ms']);
+    if (totalMs === undefined) {
+        return undefined;
+    }
+    const phases: MigrationTimingPhase[] = Object.entries(labels)
+        .flatMap(([key, value]) => {
+            const match = key.match(/^be\.stamhoofd\.migrations\.phase\.(.+)-ms$/);
+            const durationMs = numberLabel(value);
+            return match && durationMs !== undefined
+                ? [{ name: match[1], startedAt: '', finishedAt: '', durationMs, status: 'success' as const }]
+                : [];
+        })
+        .sort((a, b) => a.name.localeCompare(b.name));
+    return { totalMs, phases };
+}
+
+function labelsForTimings(timings: MigrationTimings | undefined): Record<string, string | undefined> {
+    if (!timings) {
+        return {};
+    }
+    const labels: Record<string, string> = {
+        'be.stamhoofd.migrations.duration-ms': String(Math.round(timings.totalMs)),
+    };
+    for (const phase of timings.phases) {
+        labels[`be.stamhoofd.migrations.phase.${phase.name}-ms`] = String(Math.round(phase.durationMs));
+    }
+    return labels;
+}
+
+function numberLabel(value: string | undefined): number | undefined {
+    if (value === undefined) {
+        return undefined;
+    }
+    const number = Number(value);
+    return Number.isFinite(number) ? number : undefined;
 }
 
 function compactLabels(labels: Record<string, string | undefined>): Record<string, string> {

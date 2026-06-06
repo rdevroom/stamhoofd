@@ -1,4 +1,4 @@
-import { createMigrationCatalog, inspectMigrationImage, listMigrationImages } from '@stamhoofd/migrations-manager';
+import { createMigrationCatalog, inspectMigrationImage, listMigrationImages, timingsFromLabels } from '@stamhoofd/migrations-manager';
 import type { ImageSummary, MigrationCatalogSnapshot, MigrationImageDetails, MigrationImageManifest, MigrationImageOverview, MigrationTimingPhase } from '@stamhoofd/migrations-manager';
 import { Flags } from '@oclif/core';
 import { BaseCommand } from '../../base-command.js';
@@ -130,11 +130,8 @@ async function formatChainOverview(chainId: string, catalog: MigrationCatalogSna
     }
     const progress = createChainProgress(chain, catalog);
     const display = chainDisplayName(chain);
-    const timingDetails = includeTimings ? await inspectTimingDetails(chain) : { details: [], failures: [] };
-    const timingByMigration = new Map(timingDetails.details.map((detail) => {
-        const migration = detail.manifest?.migration?.normalizedFile ?? detail.metadata.labels['be.stamhoofd.migrations.migration'];
-        return migration && typeof detail.manifest?.timings?.totalMs === 'number' ? [migration, detail.manifest.timings.totalMs] as const : undefined;
-    }).filter((item): item is readonly [string, number] => item !== undefined));
+    const timingDetails = includeTimings ? await inspectTimingDetails(chain) : { timings: [], failures: [] };
+    const timingByMigration = new Map(timingDetails.timings.map(item => [item.migration, item.totalMs] as const));
     const lines = [
         `Chain ${display.primary}`,
         `${display.secondary}`,
@@ -151,32 +148,36 @@ async function formatChainOverview(chainId: string, catalog: MigrationCatalogSna
     return lines.join('\n');
 }
 
-async function inspectTimingDetails(chain: MigrationImageOverview): Promise<{ details: MigrationImageDetails[]; failures: Array<{ image: ImageSummary; error: unknown }> }> {
+async function inspectTimingDetails(chain: MigrationImageOverview): Promise<{ timings: Array<{ migration: string; totalMs: number; phases: MigrationTimingPhase[] }>; failures: Array<{ image: ImageSummary; error: unknown }> }> {
     const migrationImages = chain.images.filter(image => image.labels['be.stamhoofd.migrations.role'] === 'migration');
-    const inspected = await mapWithConcurrency(migrationImages, 8, async (image) => {
+    const fromLabels = migrationImages.map((image) => {
+        const migration = image.labels['be.stamhoofd.migrations.migration'];
+        const timings = timingsFromLabels(image.labels);
+        return migration && timings ? { migration, totalMs: timings.totalMs, phases: timings.phases } : undefined;
+    }).filter((item): item is { migration: string; totalMs: number; phases: MigrationTimingPhase[] } => item !== undefined);
+    const missing = migrationImages.filter(image => !timingsFromLabels(image.labels));
+    const inspected = await mapWithConcurrency(missing, 8, async (image) => {
         try {
             return { detail: await inspectMigrationImage({ image: imageReference(image) }), image, error: undefined };
         } catch (error) {
             return { detail: undefined, image, error };
         }
     });
+    const fromManifest = inspected.map(item => item.detail).filter((detail): detail is MigrationImageDetails => detail !== undefined).map((detail) => {
+        const migration = detail.manifest?.migration?.normalizedFile ?? detail.metadata.labels['be.stamhoofd.migrations.migration'];
+        const totalMs = detail.manifest?.timings?.totalMs;
+        return migration && typeof totalMs === 'number'
+            ? { migration, totalMs, phases: detail.manifest?.timings?.phases ?? [] }
+            : undefined;
+    }).filter((item): item is { migration: string; totalMs: number; phases: MigrationTimingPhase[] } => item !== undefined);
     return {
-        details: inspected.map(item => item.detail).filter((detail): detail is MigrationImageDetails => detail !== undefined),
+        timings: [...fromLabels, ...fromManifest],
         failures: inspected.filter((item): item is { detail: undefined; image: ImageSummary; error: unknown } => item.error !== undefined).map(({ image, error }) => ({ image, error })),
     };
 }
 
-function formatTimingSummary(inspected: { details: MigrationImageDetails[]; failures: Array<{ image: ImageSummary; error: unknown }> }): string {
-    const details = inspected.details;
-    const timed = details
-        .map((detail) => {
-            const migration = detail.manifest?.migration?.normalizedFile ?? detail.metadata.labels['be.stamhoofd.migrations.migration'];
-            const totalMs = detail.manifest?.timings?.totalMs;
-            return migration && typeof totalMs === 'number'
-                ? { migration, totalMs, phases: detail.manifest?.timings?.phases ?? [] }
-                : undefined;
-        })
-        .filter((item): item is { migration: string; totalMs: number; phases: MigrationTimingPhase[] } => item !== undefined);
+function formatTimingSummary(inspected: { timings: Array<{ migration: string; totalMs: number; phases: MigrationTimingPhase[] }>; failures: Array<{ image: ImageSummary; error: unknown }> }): string {
+    const timed = inspected.timings;
 
     if (timed.length === 0) {
         return ['Timings: no timing data available in this chain.', formatTimingWarnings(inspected.failures)].filter(Boolean).join('\n');

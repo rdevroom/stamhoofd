@@ -6,7 +6,7 @@ import { labelsForManifest } from './labels.js';
 import { MysqlImageDatabase } from './mysql-image-database.js';
 import { createCliContainerRuntime, runCommand } from './runtime.js';
 import { MigrationTimer } from './timings.js';
-import type { BaseImageOptions, BaseImageResult, MigrationChainResult, MigrationExecutionResult, MigrationImageManifest, RunMigrationChainOptions, StaleMigrationOutput } from './types.js';
+import type { BaseImageOptions, BaseImageResult, MigrationChainResult, MigrationExecutionResult, MigrationImageManifest, MigrationTimings, RunMigrationChainOptions, StaleMigrationOutput } from './types.js';
 
 const defaultMysqlImage = 'docker.io/library/mysql:8.4';
 
@@ -95,11 +95,15 @@ export async function runMigrationChain(options: RunMigrationChainOptions): Prom
 
     const baseProgress = await readBaseMigrationProgress(runtime, options.baseImage);
     const startFrom = options.startFrom ?? startFromBaseProgress(catalog, baseProgress);
-    const migrations = !options.startFrom && baseProgress.completed >= catalog.entries.length
+    const selectedMigrations = !options.startFrom && baseProgress.completed >= catalog.entries.length
         ? []
         : selectMigrations(catalog, startFrom);
+    const migrations = options.limit === undefined ? selectedMigrations : selectedMigrations.slice(0, options.limit);
     const database = new MysqlImageDatabase(runtime, options.verbose ?? false);
     const results: MigrationExecutionResult[] = [];
+    const timingResults: Array<{ migration: string; image: string; status: 'success' | 'failed'; timer: MigrationTimer }> = [];
+    const cleanupPromises: Promise<void>[] = [];
+    const chainTimer = new MigrationTimer();
     let parentImage = options.baseImage;
     const previousChainId = options.previousChainId ?? baseProgress.chainId;
 
@@ -175,19 +179,39 @@ export async function runMigrationChain(options: RunMigrationChainOptions): Prom
         };
         await measureMigrationPhase(options, timer, chainId, migration, results.length, migrations.length, 'write-manifest', 'Writing manifest', { container }, () => database.writeManifest(container, manifest, { [`${migration.normalizedFile}.log`]: log }));
         await measureMigrationPhase(options, timer, chainId, migration, results.length, migrations.length, 'stop-mysql', 'Stopping MySQL', { container }, () => database.stopForCommit(container));
-        const imageId = await measureMigrationPhase(options, timer, chainId, migration, results.length, migrations.length, 'commit-image', 'Committing image', { container, image: tag }, () => runtime.commit(container, tag, { labels: labelsForManifest(manifest) }));
-        await measureMigrationPhase(options, timer, chainId, migration, results.length, migrations.length, 'remove-container', 'Removing container', { container }, () => runtime.remove(container));
+        const preCommitTimings = timer.snapshot();
+        const imageId = await measureMigrationPhase(options, timer, chainId, migration, results.length, migrations.length, 'commit-image', 'Committing image', { container, image: tag }, () => runtime.commit(container, tag, { labels: labelsForManifest(manifest, preCommitTimings) }));
+        const cleanup = timer.measure('remove-container', { container }, () => runtime.remove(container));
+        cleanupPromises.push(cleanup);
 
         results.push({ migration, status, image: tag, imageId, startedAt, finishedAt, log, error });
         options.onProgress?.({ type: 'migration:finish', chainId, result: results[results.length - 1], completed: results.length, total: migrations.length });
         parentImage = tag;
+        timingResults.push({ migration: migration.normalizedFile, image: tag, status, timer });
         if (status === 'failed' && !continueOnFailure) {
+            await cleanup;
             break;
         }
     }
 
+    await Promise.all(cleanupPromises);
     options.onProgress?.({ type: 'done', chainId, completed: results.length, total: migrations.length });
-    return { chainId, catalog, changedFiles, results };
+    const migrationTimings = timingResults.map(result => ({ migration: result.migration, image: result.image, status: result.status, timings: result.timer.snapshot() }));
+    const totals = phaseTotals(migrationTimings.map(result => result.timings));
+    const measuredPhaseMs = totals.reduce((sum, phase) => sum + phase.totalMs, 0);
+    const totalMs = chainTimer.totalMs();
+    return { chainId, catalog, changedFiles, results, timings: { totalMs, measuredPhaseMs, unaccountedMs: Math.max(0, totalMs - measuredPhaseMs), migrations: migrationTimings, phaseTotals: totals } };
+}
+
+function phaseTotals(timings: MigrationTimings[]): NonNullable<MigrationChainResult['timings']>['phaseTotals'] {
+    const totals = new Map<string, { totalMs: number; count: number }>();
+    for (const timing of timings) {
+        for (const phase of timing.phases) {
+            const current = totals.get(phase.name) ?? { totalMs: 0, count: 0 };
+            totals.set(phase.name, { totalMs: current.totalMs + phase.durationMs, count: current.count + 1 });
+        }
+    }
+    return [...totals.entries()].map(([name, value]) => ({ name, totalMs: value.totalMs, count: value.count })).sort((a, b) => b.totalMs - a.totalMs);
 }
 
 async function measureMigrationPhase<T>(options: RunMigrationChainOptions, timer: MigrationTimer, chainId: string, migration: Awaited<ReturnType<typeof createMigrationCatalog>>['entries'][number], completed: number, total: number, phase: string, message: string, data: Record<string, string | number | boolean | null> | undefined, run: () => Promise<T>): Promise<T> {

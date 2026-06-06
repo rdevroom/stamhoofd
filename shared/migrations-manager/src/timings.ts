@@ -44,6 +44,10 @@ export class MigrationTimer {
         };
     }
 
+    totalMs(): number {
+        return roundMs(nowMs() - this.startedMs);
+    }
+
     private start(name: string, data?: TimingData): StartedPhase {
         return {
             name,

@@ -32,6 +32,7 @@ describe('MigrationsApply command', () => {
                 'allow-changed-files': true,
                 build: 'force',
                 'mysql-image': 'mysql:8.4',
+                limit: 3,
             },
         }));
         (command as any).createContext = vi.fn(async () => ({ rootDir: '/repo', env: 'keeo', verbose: true }));
@@ -47,6 +48,7 @@ describe('MigrationsApply command', () => {
             allowChangedFiles: true,
             build: 'force',
             mysqlImage: 'mysql:8.4',
+            limit: 3,
             verbose: true,
             env: { DB_DATABASE: 'stamhoofd-development' },
             telemetry: true,

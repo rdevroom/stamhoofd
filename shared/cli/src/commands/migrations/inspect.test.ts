@@ -6,6 +6,10 @@ vi.mock('@stamhoofd/migrations-manager', () => ({
     createMigrationCatalog: vi.fn(async () => ({ entries: [] })),
     inspectMigrationImage: vi.fn(async () => details()),
     listMigrationImages: vi.fn(async () => []),
+    timingsFromLabels: vi.fn((labels: Record<string, string>) => {
+        const totalMs = labels['be.stamhoofd.migrations.duration-ms'];
+        return totalMs ? { totalMs: Number(totalMs), phases: [] } : undefined;
+    }),
 }));
 
 describe('MigrationsInspect command', () => {
@@ -64,6 +68,23 @@ describe('MigrationsInspect command', () => {
         expect(output).toContain('Second  2.00s');
         expect(output).toContain('Slowest migrations');
         expect(output).toContain('Timing warnings: skipped 1 image');
+    });
+
+    it('uses timing labels without inspecting images', async () => {
+        vi.mocked(createMigrationCatalog).mockResolvedValueOnce(catalog());
+        vi.mocked(listMigrationImages).mockResolvedValueOnce([chain({ timingLabels: true })]);
+        const messages: string[] = [];
+        vi.spyOn(console, 'log').mockImplementation((message?: unknown) => {
+            messages.push(typeof message === 'string' ? message : '');
+        });
+        const command = new MigrationsInspect([], {} as any);
+        (command as any).parse = vi.fn(async () => ({ flags: { chain: 'chain-1', timings: true, verbose: false, catalog: false, labels: false, logs: false, 'logs-lines': 20 } }));
+        (command as any).createContext = vi.fn(async () => ({ rootDir: '/repo', verbose: false }));
+
+        await command.run();
+
+        expect(inspectMigrationImage).not.toHaveBeenCalled();
+        expect(messages.join('\n')).toContain('Second  2.00s');
     });
 });
 
@@ -146,9 +167,9 @@ function catalog() {
     };
 }
 
-function chain() {
-    const first = image('localhost/chain', '0001-first.js', 0);
-    const second = image('localhost/chain', '0002-second.js', 1);
+function chain(options: { timingLabels?: boolean } = {}) {
+    const first = image('localhost/chain', '0001-first.js', 0, options);
+    const second = image('localhost/chain', '0002-second.js', 1, options);
     return {
         chainId: 'chain-1',
         images: [first, second],
@@ -157,7 +178,7 @@ function chain() {
     };
 }
 
-function image(repository: string, migration: string, index: number) {
+function image(repository: string, migration: string, index: number, options: { timingLabels?: boolean } = {}) {
     return {
         id: `image-${index}`,
         repository,
@@ -169,6 +190,7 @@ function image(repository: string, migration: string, index: number) {
             'be.stamhoofd.migrations.migration': migration,
             'be.stamhoofd.migrations.migration-index': String(index),
             'be.stamhoofd.migrations.finished-at': '2026-06-05T09:01:00.000Z',
+            ...(options.timingLabels ? { 'be.stamhoofd.migrations.duration-ms': String((index + 1) * 1000) } : {}),
         },
     };
 }
