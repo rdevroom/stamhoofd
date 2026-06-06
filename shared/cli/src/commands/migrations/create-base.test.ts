@@ -27,6 +27,7 @@ vi.mock('@inquirer/prompts', () => ({
 describe('MigrationsCreateBase command', () => {
     beforeEach(() => {
         vi.clearAllMocks();
+        vi.unstubAllEnvs();
         vi.mocked(run).mockImplementation(async (command, args) => {
             if (command === 'gpg' && args[0] === '--version') {
                 return { stdout: 'gpg (GnuPG) 2.4.0\n', stderr: '', status: 0 };
@@ -88,12 +89,13 @@ describe('MigrationsCreateBase command', () => {
         await expect(command.run()).rejects.toThrow('Choose a different --tag');
     });
 
-    it('accepts encrypted and compressed database exports', async () => {
+    it('accepts encrypted and compressed .enc database exports', async () => {
+        vi.stubEnv('HOME', '/home/test');
         const command = new MigrationsCreateBase([], {} as any);
         (command as any).parse = vi.fn(async () => ({
             flags: {
                 verbose: false,
-                dump: '/tmp/database.sql.gz.gpg',
+                dump: '~/database.sql.gz.enc',
                 database: 'stamhoofd-development',
                 tag: 'stamhoofd-migrations/dev:base',
                 'mysql-image': undefined,
@@ -105,8 +107,9 @@ describe('MigrationsCreateBase command', () => {
 
         expect(run).toHaveBeenCalledWith('gpg', ['--version'], { capture: true, allowFailure: true });
         expect(run).toHaveBeenCalledWith('gzip', ['--version'], { capture: true, allowFailure: true });
+        expect(run).toHaveBeenCalledWith('gpg', ['--batch', '--decrypt', '--output', expect.any(String), '/home/test/database.sql.gz.enc'], { capture: true, allowFailure: true, verbose: false });
         expect(createBaseImage).toHaveBeenCalledWith(expect.objectContaining({
-            dump: '/tmp/database.sql.gz.gpg',
+            dump: '/home/test/database.sql.gz.enc',
             dumpGpgHome: undefined,
         }));
     });

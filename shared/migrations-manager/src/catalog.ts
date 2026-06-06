@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { createReadStream } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { runCommand } from './runtime.js';
@@ -84,7 +85,14 @@ export function selectMigrations(snapshot: MigrationCatalogSnapshot, startFrom?:
 }
 
 export async function sha256File(file: string): Promise<string> {
-    return crypto.createHash('sha256').update(await fs.readFile(file)).digest('hex');
+    const hash = crypto.createHash('sha256');
+    const stream = createReadStream(file);
+
+    return await new Promise<string>((resolve, reject) => {
+        stream.on('data', chunk => hash.update(chunk));
+        stream.on('error', reject);
+        stream.on('end', () => resolve(hash.digest('hex')));
+    });
 }
 
 export function sha256Json(value: unknown): string {

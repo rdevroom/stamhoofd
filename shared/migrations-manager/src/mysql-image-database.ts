@@ -97,21 +97,26 @@ export class MysqlImageDatabase {
 
 function dumpSourceCommands(dump: string, options: { gpgHome?: string }): PipelineCommand[] {
     const gpgArgs = [...(options.gpgHome ? ['--homedir', options.gpgHome] : []), '--batch', '--decrypt', dump];
-    if (dump.endsWith('.sql.gz.gpg') || dump.endsWith('.dump.gz.gpg')) {
+    if (hasDumpExtension(dump, ['.sql.gz.gpg', '.dump.gz.gpg', '.sql.gz.enc', '.dump.gz.enc'])) {
         return [
             { command: 'gpg', args: gpgArgs },
             { command: 'gzip', args: ['-dc'] },
         ];
     }
-    if (dump.endsWith('.sql.gpg') || dump.endsWith('.dump.gpg')) {
+    if (hasDumpExtension(dump, ['.sql.gpg', '.dump.gpg', '.sql.enc', '.dump.enc'])) {
         return [{ command: 'gpg', args: gpgArgs }];
     }
-    if (dump.endsWith('.sql.gz') || dump.endsWith('.dump.gz')) {
+    if (hasDumpExtension(dump, ['.sql.gz', '.dump.gz'])) {
         return [{ command: 'gzip', args: ['-dc', dump] }];
     }
-    if (dump.endsWith('.sql') || dump.endsWith('.dump')) {
+    if (hasDumpExtension(dump, ['.sql', '.dump'])) {
         return [{ command: 'cat', args: [dump] }];
     }
 
-    throw new Error(`Unsupported dump extension. Supported formats are .sql, .sql.gz, .sql.gpg, and .sql.gz.gpg.`);
+    throw new Error(`Unsupported dump extension. Supported formats are .sql, .sql.gz, .sql.gpg/.sql.enc, and .sql.gz.gpg/.sql.gz.enc.`);
+}
+
+function hasDumpExtension(dump: string, extensions: string[]): boolean {
+    const lower = dump.toLowerCase();
+    return extensions.some(extension => lower.endsWith(extension));
 }

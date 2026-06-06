@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { createBaseImage, createCliContainerRuntime, listMigrationImages } from '@stamhoofd/migrations-manager';
 import { Flags } from '@oclif/core';
 import { select } from '@inquirer/prompts';
@@ -16,7 +17,7 @@ export default class MigrationsCreateBase extends BaseCommand {
 
     static flags = {
         ...BaseCommand.verboseFlags,
-        dump: Flags.string({ description: 'Path to a .sql, .sql.gz, .sql.gpg, or .sql.gz.gpg file. Omit to create an empty database base image.' }),
+        dump: Flags.string({ description: 'Path to a .sql, .sql.gz, .sql.gpg/.sql.enc, or .sql.gz.gpg/.sql.gz.enc file. Omit to create an empty database base image.' }),
         database: Flags.string({ description: 'Database name to create and import into', hidden: true }),
         tag: Flags.string({ description: 'Local image tag to create' }),
         'mysql-image': Flags.string({ description: 'MySQL image to use' }),
@@ -32,7 +33,7 @@ export default class MigrationsCreateBase extends BaseCommand {
         printExplanation();
         const name = await resolveTextFlag(flags.tag, 'tag', 'Which name should this migration base use?', defaultBaseName());
         const tag = imageReferenceFromName(name);
-        const dump = await resolveBaseDump(flags.dump);
+        const dump = resolvePath(await resolveBaseDump(flags.dump));
         const format = dump ? dumpFormat(dump) : undefined;
         if (dump) {
             await validateDumpRequirements(dump, context);
@@ -124,8 +125,8 @@ async function validateDumpRequirements(dump: string, context: { verbose: boolea
 
 function dumpFormat(dump: string): { compressed: boolean; encrypted: boolean } {
     return {
-        compressed: /(?:\.sql|\.dump)\.gz(?:\.gpg)?$/i.test(dump),
-        encrypted: /(?:\.sql|\.dump)(?:\.gz)?\.gpg$/i.test(dump),
+        compressed: /(?:\.sql|\.dump)\.gz(?:\.(?:gpg|enc))?$/i.test(dump),
+        encrypted: /(?:\.sql|\.dump)(?:\.gz)?\.(?:gpg|enc)$/i.test(dump),
     };
 }
 
@@ -172,4 +173,17 @@ function imageReferenceFromName(name: string): string {
 
 function imageNameSlug(name: string): string {
     return name.toLowerCase().replace(/[^a-z0-9_.-]+/g, '-').replace(/^-+|-+$/g, '') || 'base';
+}
+
+function resolvePath(file: string | undefined): string | undefined {
+    if (!file) {
+        return undefined;
+    }
+    if (file === '~') {
+        return process.env.HOME ? path.resolve(process.env.HOME) : file;
+    }
+    if (file.startsWith('~/')) {
+        return process.env.HOME ? path.resolve(process.env.HOME, file.slice(2)) : path.resolve(file);
+    }
+    return path.resolve(file);
 }

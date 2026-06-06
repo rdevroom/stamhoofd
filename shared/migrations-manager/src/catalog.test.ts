@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { compareCatalogs, createMigrationCatalog, normalizeMigrationFile, selectMigrations } from './catalog.js';
+import { compareCatalogs, createMigrationCatalog, normalizeMigrationFile, selectMigrations, sha256File } from './catalog.js';
 
 let root: string;
 
@@ -55,6 +55,13 @@ describe('migration catalog', () => {
     it('normalizes only TypeScript migration extensions', () => {
         expect(normalizeMigrationFile('migration.ts')).toBe('migration.js');
         expect(normalizeMigrationFile('migration.sql')).toBe('migration.sql');
+    });
+
+    it('hashes files with SHA-256', async () => {
+        const file = path.join(root, 'dump.sql');
+        await fs.writeFile(file, 'hello');
+
+        await expect(sha256File(file)).resolves.toBe('2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824');
     });
 });
 

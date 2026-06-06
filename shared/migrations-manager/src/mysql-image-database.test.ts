@@ -13,14 +13,14 @@ describe('MysqlImageDatabase', () => {
         vi.clearAllMocks();
     });
 
-    it('streams encrypted and compressed dumps into mysql without copying plaintext files', async () => {
+    it('streams encrypted and compressed .enc dumps into mysql without copying plaintext files', async () => {
         const runtime = createRuntime();
         const database = new MysqlImageDatabase(runtime, false);
 
-        await database.importDump('base-container', '/tmp/database.sql.gz.gpg', 'stamhoofd_migrations');
+        await database.importDump('base-container', '/tmp/database.sql.gz.enc', 'stamhoofd_migrations');
 
         expect(runPipeline).toHaveBeenCalledWith([
-            { command: 'gpg', args: ['--batch', '--decrypt', '/tmp/database.sql.gz.gpg'] },
+            { command: 'gpg', args: ['--batch', '--decrypt', '/tmp/database.sql.gz.enc'] },
             { command: 'gzip', args: ['-dc'] },
             { command: 'docker', args: ['exec', '-i', 'base-container', 'mysql', '-h127.0.0.1', '-uroot', '-proot', '--max_allowed_packet=1G', 'stamhoofd_migrations'] },
         ], { verbose: false });

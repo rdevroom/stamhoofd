@@ -323,7 +323,7 @@ describe('database management commands', () => {
 
     it('imports a database export into a forced target', async () => {
         const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'stam-db-import-test-'));
-        const inputFile = path.join(tempDir, 'backup.sql.gz.gpg');
+        const inputFile = path.join(tempDir, 'backup.sql.gz.enc');
         await fs.writeFile(inputFile, 'dump');
         const command = createCommand(DbImport, { input: inputFile, to: 'target-db', force: true });
 

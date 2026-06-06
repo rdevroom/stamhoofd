@@ -17,10 +17,10 @@ export async function createBaseImage(options: BaseImageOptions): Promise<BaseIm
     const mysqlImage = options.mysqlImage ?? defaultMysqlImage;
     const telemetry = options.telemetry ?? true;
     const chainId = options.chainId ?? createChainId();
+    const dump = options.dump ? expandHome(options.dump) : undefined;
+    const dumpSha256Promise = dump ? sha256File(dump).catch(() => 'unknown') : Promise.resolve(undefined);
     const catalog = await createMigrationCatalog(rootDir);
     const database = new MysqlImageDatabase(runtime, options.verbose ?? false);
-    const dump = options.dump ? expandHome(options.dump) : undefined;
-    const dumpSha256 = dump ? await sha256File(dump) : undefined;
     const container = safeContainerName(`stamhoofd-migrations-base-${chainId}`);
     const startedAt = new Date().toISOString();
     await measureBasePhase(options, timer, 'assert-image-missing', 'Checking image name', { image: options.tag }, () => assertImageMissing(runtime, options.tag));
@@ -38,6 +38,7 @@ export async function createBaseImage(options: BaseImageOptions): Promise<BaseIm
             return detectBaseMigrationProgress(catalog, executed);
         });
         await measureBasePhase(options, timer, 'prepare-metadata', 'Writing metadata', { container }, () => Promise.resolve());
+        const dumpSha256 = await dumpSha256Promise;
         const finishedAt = new Date().toISOString();
         const manifest: MigrationImageManifest = {
             version: 1,

@@ -134,7 +134,7 @@ export async function importDatabase(inputFile: string, database: string, option
     await ensureTargetDatabaseAvailable(database, options);
 
     const runtime = await docker.getContainerRuntime();
-    const source = inputFile.endsWith('.gpg') || inputFile.includes('.gpg.')
+    const source = inputFile.endsWith('.gpg') || inputFile.includes('.gpg.') || inputFile.endsWith('.enc') || inputFile.includes('.enc.')
         ? `gpg --batch --decrypt ${shellQuote(inputFile)}`
         : `cat ${shellQuote(inputFile)}`;
     const unzip = inputFile.endsWith('.gz') || inputFile.includes('.gz.') ? ' | gzip -dc' : '';
