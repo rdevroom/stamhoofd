@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { buildRequiredPackages } from './build.js';
 import { compareCatalogs, createMigrationCatalog, selectMigrations, sha256File } from './catalog.js';
@@ -6,9 +7,11 @@ import { labelsForManifest } from './labels.js';
 import { MysqlImageDatabase } from './mysql-image-database.js';
 import { createCliContainerRuntime, runCommand } from './runtime.js';
 import { MigrationTimer } from './timings.js';
-import type { BaseImageOptions, BaseImageResult, MigrationChainResult, MigrationExecutionResult, MigrationImageManifest, MigrationTimings, RunMigrationChainOptions, StaleMigrationOutput } from './types.js';
+import type { BaseImageOptions, BaseImageResult, ChangedMigrationFile, ContainerRuntime, MigrationChainResult, MigrationExecutionResult, MigrationImageManifest, MigrationTimings, RunMigrationChainOptions, StaleMigrationOutput } from './types.js';
 
 const defaultMysqlImage = 'docker.io/library/mysql:8.4';
+const noPendingMigrationsExitCode = 42;
+const appliedMigrationMarker = '__stamhoofd_migration_applied__:';
 
 export async function createBaseImage(options: BaseImageOptions): Promise<BaseImageResult> {
     const rootDir = options.rootDir ?? process.cwd();
@@ -118,8 +121,19 @@ export async function runMigrationChain(options: RunMigrationChainOptions): Prom
     const chainTimer = new MigrationTimer();
     let parentImage = options.baseImage;
     const previousChainId = options.previousChainId ?? baseProgress.chainId;
+    const progressTotal = migrations.length === 0 && options.limit === undefined ? 1 : migrations.length;
 
-    options.onProgress?.({ type: 'start', chainId, total: migrations.length });
+    options.onProgress?.({ type: 'start', chainId, total: progressTotal });
+
+    if (migrations.length === 0 && options.limit === undefined) {
+        const probe = await runPendingMigrationProbe({ options, rootDir, runtime, database, catalog, chainId, parentImage, previousChainId, changedFiles, telemetry, cleanupPromises });
+        if (probe) {
+            results.push(probe.result);
+            parentImage = probe.result.image;
+            timingResults.push({ migration: probe.result.migration.normalizedFile, image: probe.result.image, status: probe.result.status, timer: probe.timer });
+            options.onProgress?.({ type: 'migration:finish', chainId, result: probe.result, completed: results.length, total: results.length });
+        }
+    }
 
     for (const migration of migrations) {
         const tag = `${options.tagPrefix}:${String(migration.index + 1).padStart(4, '0')}-${slug(migration.normalizedFile)}`;
@@ -213,12 +227,133 @@ export async function runMigrationChain(options: RunMigrationChainOptions): Prom
     }
 
     await Promise.all(cleanupPromises);
-    options.onProgress?.({ type: 'done', chainId, completed: results.length, total: migrations.length });
+    options.onProgress?.({ type: 'done', chainId, completed: results.length, total: migrations.length === 0 ? results.length : migrations.length });
     const migrationTimings = timingResults.map(result => ({ migration: result.migration, image: result.image, status: result.status, timings: result.timer.snapshot() }));
     const totals = phaseTotals(migrationTimings.map(result => result.timings));
     const measuredPhaseMs = totals.reduce((sum, phase) => sum + phase.totalMs, 0);
     const totalMs = chainTimer.totalMs();
     return { chainId, catalog, changedFiles, results, timings: { totalMs, measuredPhaseMs, unaccountedMs: Math.max(0, totalMs - measuredPhaseMs), migrations: migrationTimings, phaseTotals: totals } };
+}
+
+async function runPendingMigrationProbe(context: {
+    options: RunMigrationChainOptions;
+    rootDir: string;
+    runtime: ContainerRuntime;
+    database: MysqlImageDatabase;
+    catalog: Awaited<ReturnType<typeof createMigrationCatalog>>;
+    chainId: string;
+    parentImage: string;
+    previousChainId?: string;
+    changedFiles: ChangedMigrationFile[];
+    telemetry: boolean;
+    cleanupPromises: Promise<void>[];
+}): Promise<{ result: MigrationExecutionResult; timer: MigrationTimer } | undefined> {
+    const { options, rootDir, runtime, database, catalog, chainId, parentImage, previousChainId, changedFiles, telemetry, cleanupPromises } = context;
+    const container = safeContainerName(`stamhoofd-migrations-${chainId}-probe`);
+    const timer = new MigrationTimer();
+    const startedAt = new Date().toISOString();
+    let log = '';
+    let status: 'success' | 'failed' = 'success';
+    let error: string | undefined;
+    let migration = undefined as Awaited<ReturnType<typeof createMigrationCatalog>>['entries'][number] | undefined;
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'stamhoofd-migrations-catalog-'));
+    const catalogPath = path.join(tmp, 'catalog.json');
+
+    try {
+        await fs.writeFile(catalogPath, JSON.stringify(catalog.entries.map(entry => ({ name: entry.normalizedFile, file: compiledMigrationPath(rootDir, entry) }))));
+        await timer.measure('start-container', { image: parentImage, container, publishPort: true }, () => database.start(parentImage, container, { publishPort: true, tuning: options.mysqlTuning }));
+        const port = await timer.measure('resolve-mapped-port', { container }, () => database.mappedPort(container));
+        if (options.mysqlTuning?.unsafe) {
+            await timer.measure('disable-redo-log', { container }, () => database.disableRedoLog(container));
+        }
+        const run = await timer.measure('run-migration', { container, port, migration: 'next-pending' }, () => runCommand('node', ['--enable-source-maps', path.join(rootDir, 'backend/app/api/dist/single-migration.js'), '--catalog', catalogPath], {
+            cwd: rootDir,
+            allowFailure: true,
+            env: {
+                ...process.env,
+                ...options.env,
+                DB_HOST: '127.0.0.1',
+                DB_PORT: port,
+                DB_DATABASE: options.database,
+                DB_USER: 'root',
+                DB_PASS: 'root',
+                MIGRATION_DB_HOST: '127.0.0.1',
+                MIGRATION_DB_PORT: port,
+                MIGRATION_DB_DATABASE: options.database,
+                MIGRATION_DB_USER: 'root',
+                MIGRATION_DB_PASS: 'root',
+                DB_MULTIPLE_STATEMENTS: 'true',
+                STAMHOOFD_ENV: options.env?.STAMHOOFD_ENV ?? process.env.STAMHOOFD_ENV ?? 'stamhoofd',
+            },
+            verbose: options.verbose,
+        }));
+        log = [run.stdout, run.stderr].filter(Boolean).join('\n');
+        if (run.status === noPendingMigrationsExitCode) {
+            await timer.measure('remove-container', { container }, () => runtime.remove(container));
+            return undefined;
+        }
+
+        const migrationName = parseAppliedMigration(log);
+        migration = catalog.entries.find(entry => entry.normalizedFile === migrationName);
+        if (!migration) {
+            throw new Error(`Could not determine applied migration from probe output.${log.trim() ? ` Output: ${log.trim()}` : ''}`);
+        }
+        if (run.status !== 0) {
+            status = 'failed';
+            error = log.trim() || `Migration exited with status ${run.status}`;
+        }
+        if (status === 'success' && options.mysqlTuning?.unsafe) {
+            await timer.measure('enable-redo-log', { container }, () => database.enableRedoLog(container));
+        }
+    } catch (e) {
+        status = 'failed';
+        error = e instanceof Error ? e.message : String(e);
+        log = [log, error].filter(Boolean).join('\n');
+    } finally {
+        await fs.rm(tmp, { recursive: true, force: true });
+    }
+
+    if (!migration) {
+        await runtime.remove(container);
+        throw new Error(error ?? 'Could not determine pending migration.');
+    }
+
+    const tag = `${options.tagPrefix}:${String(migration.index + 1).padStart(4, '0')}-${slug(migration.normalizedFile)}`;
+    await timer.measure('assert-image-missing', { image: tag }, () => assertImageMissing(runtime, tag));
+    await timer.measure('prepare-metadata', { container, logBytes: Buffer.byteLength(log) }, () => Promise.resolve());
+    const finishedAt = new Date().toISOString();
+    const manifest: MigrationImageManifest = {
+        version: 1,
+        chainId,
+        role: 'migration',
+        status,
+        database: options.database,
+        image: tag,
+        parentImage,
+        migration,
+        catalog,
+        changedFiles,
+        previousCatalogHash: options.previousCatalog?.hash,
+        startedAt,
+        finishedAt,
+        error,
+        logPath: `/stamhoofd-migrations/logs/${migration.normalizedFile}.log`,
+        runtime: runtime.command,
+        mysqlImage: options.mysqlImage ?? defaultMysqlImage,
+        previousChainId,
+        timings: telemetry ? timer.snapshot() : undefined,
+    };
+    await timer.measure('write-manifest', { container }, () => database.writeManifest(container, manifest, { [`${migration.normalizedFile}.log`]: log }));
+    await timer.measure('stop-mysql', { container }, () => database.stopForCommit(container));
+    const preCommitTimings = timer.snapshot();
+    const imageId = await timer.measure('commit-image', { container, image: tag }, () => runtime.commit(container, tag, { labels: labelsForManifest(manifest, preCommitTimings) }));
+    cleanupPromises.push(timer.measure('remove-container', { container }, () => runtime.remove(container)));
+
+    return { result: { migration, status, image: tag, imageId, startedAt, finishedAt, log, error }, timer };
+}
+
+function parseAppliedMigration(log: string): string | undefined {
+    return log.split('\n').find(line => line.startsWith(appliedMigrationMarker))?.slice(appliedMigrationMarker.length).trim();
 }
 
 function phaseTotals(timings: MigrationTimings[]): NonNullable<MigrationChainResult['timings']>['phaseTotals'] {
@@ -273,8 +408,9 @@ function safeContainerName(name: string): string {
 function detectBaseMigrationProgress(catalog: Awaited<ReturnType<typeof createMigrationCatalog>>, executed: string[]): { count: number; last?: { index: number; normalizedFile: string } } {
     const executedSet = new Set(executed.map(file => file.replace(/\.ts$/, '.js')));
     const applied = catalog.entries.filter(entry => executedSet.has(entry.normalizedFile));
-    const last = applied.at(-1);
-    return { count: applied.length, last: last ? { index: last.index, normalizedFile: last.normalizedFile } : undefined };
+    const last = catalog.entries.find(entry => !executedSet.has(entry.normalizedFile));
+    const lastApplied = last ? catalog.entries[last.index - 1] : catalog.entries.at(-1);
+    return { count: applied.length, last: lastApplied ? { index: lastApplied.index, normalizedFile: lastApplied.normalizedFile } : undefined };
 }
 
 async function readBaseMigrationProgress(runtime: { inspectImage(image: string): Promise<{ labels: Record<string, string> }> }, image: string): Promise<{ chainId?: string; completed: number }> {

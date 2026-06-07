@@ -1,4 +1,5 @@
 import { createRequire } from 'node:module';
+import fs from 'node:fs/promises';
 
 import { Column, Database, DatabaseInstance, Migration } from '@simonbackx/simple-database';
 import { Version } from '@stamhoofd/structures';
@@ -13,7 +14,47 @@ export type RunSingleMigrationOptions = {
     name: string;
 };
 
-export async function runSingleMigration(options: RunSingleMigrationOptions): Promise<void> {
+export type RunNextMigrationOptions = {
+    catalog: string;
+};
+
+export type RunMigrationResult = {
+    status: 'applied' | 'none';
+    name?: string;
+};
+
+export const noPendingMigrationsExitCode = 42;
+export const appliedMigrationMarker = '__stamhoofd_migration_applied__:';
+
+export async function runSingleMigration(options: RunSingleMigrationOptions): Promise<RunMigrationResult> {
+    await prepareDatabase();
+
+    if (await isMigrationExecuted(options.name)) {
+        console.log(`Migration ${normalizeMigrationFile(options.name)} was already executed, skipping.`);
+        await Database.reload({});
+        return { status: 'applied', name: normalizeMigrationFile(options.name) };
+    }
+
+    await runMigrationFile(options.file, options.name);
+    return { status: 'applied', name: normalizeMigrationFile(options.name) };
+}
+
+export async function runNextMigration(options: RunNextMigrationOptions): Promise<RunMigrationResult> {
+    await prepareDatabase();
+    const catalog = JSON.parse(await fs.readFile(options.catalog, 'utf-8')) as Array<{ name: string; file: string }>;
+    const next = await firstPendingMigration(catalog);
+    if (!next) {
+        console.log('No pending migrations left.');
+        await Database.reload({});
+        return { status: 'none' };
+    }
+
+    console.log(`${appliedMigrationMarker}${normalizeMigrationFile(next.name)}`);
+    await runMigrationFile(next.file, next.name);
+    return { status: 'applied', name: normalizeMigrationFile(next.name) };
+}
+
+async function prepareDatabase(): Promise<void> {
     if (!STAMHOOFD.DB_DATABASE) {
         throw new Error('STAMHOOFD.DB_DATABASE is not set');
     }
@@ -24,21 +65,26 @@ export async function runSingleMigration(options: RunSingleMigrationOptions): Pr
     await Database.reload({});
     await createDatabaseIfNeeded(STAMHOOFD.DB_DATABASE);
     await runSetupMigration();
+}
 
-    if (await isMigrationExecuted(options.name)) {
-        console.log(`Migration ${normalizeMigrationFile(options.name)} was already executed, skipping.`);
-        await Database.reload({});
-        return;
-    }
-
-    const migration = await Migration.getMigration(options.file);
+async function runMigrationFile(file: string, name: string): Promise<void> {
+    const migration = await Migration.getMigration(file);
     if (!migration) {
-        throw new Error(`Could not load migration: ${options.file}`);
+        throw new Error(`Could not load migration: ${file}`);
     }
 
     await migration.up();
-    await markMigrationAsExecuted(options.name);
+    await markMigrationAsExecuted(name);
     await Database.reload({});
+}
+
+async function firstPendingMigration(catalog: Array<{ name: string; file: string }>): Promise<{ name: string; file: string } | undefined> {
+    for (const migration of catalog) {
+        if (!await isMigrationExecuted(migration.name)) {
+            return migration;
+        }
+    }
+    return undefined;
 }
 
 async function createDatabaseIfNeeded(database: string): Promise<void> {

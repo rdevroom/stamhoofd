@@ -12,8 +12,14 @@ backendEnv.load({ service: 'api' }).catch((error) => {
     applyDatabaseEnvironmentOverrides();
     const file = readOption('file') ?? process.env.MIGRATION_FILE;
     const name = readOption('name') ?? process.env.MIGRATION_NAME;
+    const catalog = readOption('catalog') ?? process.env.MIGRATION_CATALOG;
+    if (catalog) {
+        const { noPendingMigrationsExitCode, runNextMigration } = await import('./src/migrations-runner/run-single.js');
+        const result = await runNextMigration({ catalog });
+        process.exit(result.status === 'none' ? noPendingMigrationsExitCode : 0);
+    }
     if (!file || !name) {
-        throw new Error('Usage: single-migration --file <compiled migration path> --name <normalized migration filename>');
+        throw new Error('Usage: single-migration --file <compiled migration path> --name <normalized migration filename>, or single-migration --catalog <catalog json>');
     }
     const { runSingleMigration } = await import('./src/migrations-runner/run-single.js');
     await runSingleMigration({ file, name });
