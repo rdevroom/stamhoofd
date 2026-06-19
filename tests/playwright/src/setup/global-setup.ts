@@ -38,6 +38,11 @@ export default async function globalSetup() {
     };
 
     const migrateDatabases = async () => {
+        if (process.env.STAMHOOFD_SKIP_PLAYWRIGHT_MIGRATIONS === 'true') {
+            console.log('Skipped Playwright database migrations.');
+            return;
+        }
+
         const workerCount = getExpectedWorkerCount();
         const { run: runMigrations } = await import('@stamhoofd/backend/migrate');
 

@@ -9,6 +9,7 @@ export default class TestUnit extends BaseCommand {
     static description = 'Starts an isolated MySQL test database, then runs unit tests. Files and --test/-t are forwarded to Vitest. Paths are forwarded unchanged to Vitest. When using --scope, provide paths relative to that package, for example src/foo.test.ts for --scope @stamhoofd/backend. Extra unknown arguments are passed to Vitest; use -- before them when invoking stam directly, or yarn stam -- test unit ... -- ... when running through Yarn.';
     static examples = [
         'stam test unit',
+        'stam test unit --clear',
         'stam test unit --ci --verbose',
         'stam test unit --scope @stamhoofd/backend src/endpoints/foo.test.ts',
         'stam test unit --scope @stamhoofd/backend src/endpoints/foo.test.ts -t "rejects invalid input"',
@@ -27,6 +28,7 @@ export default class TestUnit extends BaseCommand {
     static flags = {
         ...BaseCommand.verboseFlags,
         ci: ciFlag,
+        clear: Flags.boolean({ default: false, description: 'Clear the prepared unit test database image before running tests' }),
         scope: Flags.string({
             description: 'Lerna package scope to run, for example @stamhoofd/backend.',
         }),
@@ -44,6 +46,7 @@ export default class TestUnit extends BaseCommand {
 
         await testUnit(await this.createContext(flags), {
             ci: flags.ci,
+            clear: flags.clear,
             scopes: flags.scope ? [flags.scope] : undefined,
             vitestArgs,
         });
@@ -74,6 +77,7 @@ export function buildVitestArgs(files: string[], test: string | undefined, passt
 function isKnownFlag(arg: string): boolean {
     return arg === '--verbose'
         || arg === '--ci'
+        || arg === '--clear'
         || arg === '--scope'
         || arg.startsWith('--scope=')
         || arg === '--test'

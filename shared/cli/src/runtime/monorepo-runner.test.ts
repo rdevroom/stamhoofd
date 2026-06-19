@@ -5,6 +5,7 @@ import * as docker from '../services/docker.js';
 import { startSharedServices } from '../services/shared-services.js';
 import { run } from './command-runner.js';
 import { testE2e, testUnit } from './monorepo-runner.js';
+import { ensurePreparedTestMysqlImage, preparePlaywrightDatabases } from './test-mysql-image.js';
 
 vi.mock('./command-runner.js', () => ({
     run: vi.fn(async () => undefined),
@@ -20,6 +21,12 @@ vi.mock('../services/docker.js', () => ({
         }
         return { stdout: '', stderr: '', status: 0 };
     }),
+}));
+
+vi.mock('./test-mysql-image.js', async (importOriginal) => ({
+    ...await importOriginal<typeof import('./test-mysql-image.js')>(),
+    ensurePreparedTestMysqlImage: vi.fn(async () => 'stamhoofd-test-mysql-prepared:testhash'),
+    preparePlaywrightDatabases: vi.fn(async () => undefined),
 }));
 
 vi.mock('../services/shared-services.js', () => ({
@@ -38,10 +45,11 @@ describe('monorepo runner', () => {
     });
 
     it('runs unit tests with an isolated MySQL database', async () => {
-        await testUnit(context(), { ci: false });
+        await testUnit(context(), { ci: false, clear: false });
 
+        expect(ensurePreparedTestMysqlImage).toHaveBeenCalledWith(context(), { clear: false });
         expect(docker.removeContainer).toHaveBeenCalledWith('stamhoofd-test-mysql', false);
-        expect(docker.run).toHaveBeenCalledWith(expect.arrayContaining(['run', '-d', '--name', 'stamhoofd-test-mysql']), { quiet: true, verbose: false });
+        expect(docker.run).toHaveBeenCalledWith(expect.arrayContaining(['run', '-d', '--name', 'stamhoofd-test-mysql', 'stamhoofd-test-mysql-prepared:testhash', '--datadir=/stamhoofd-mysql-data']), { quiet: true, verbose: false });
         expect(docker.waitForMysql).toHaveBeenCalledWith('stamhoofd-test-mysql');
 
         expect(run).toHaveBeenCalledWith('npx', [
@@ -58,6 +66,7 @@ describe('monorepo runner', () => {
     it('forwards unit test scopes and Vitest args', async () => {
         await testUnit(context(), {
             ci: true,
+            clear: true,
             scopes: ['@stamhoofd/backend'],
             vitestArgs: [
                 'src/endpoints/organization/dashboard/registration-periods/PatchOrganizationRegistrationPeriodsEndpoint.test.ts',
@@ -66,6 +75,7 @@ describe('monorepo runner', () => {
             ],
         });
 
+        expect(ensurePreparedTestMysqlImage).toHaveBeenCalledWith(context(), { clear: true });
         expect(run).toHaveBeenCalledWith('npx', [
             'lerna',
             'run',
@@ -86,7 +96,10 @@ describe('monorepo runner', () => {
     it('passes the Caddy root CA to Playwright', async () => {
         await testE2e(context(), { ci: false, clear: false, ui: false, workers: 2 });
 
-        expect(docker.containerIsRunning).toHaveBeenCalledWith('stamhoofd-e2e-mysql');
+        expect(ensurePreparedTestMysqlImage).toHaveBeenCalledWith(context(), { clear: false });
+        expect(docker.removeContainer).toHaveBeenCalledWith('stamhoofd-e2e-mysql', false);
+        expect(docker.run).toHaveBeenCalledWith(expect.arrayContaining(['run', '-d', '--name', 'stamhoofd-e2e-mysql', 'stamhoofd-test-mysql-prepared:testhash', '--datadir=/stamhoofd-mysql-data']), { quiet: true, verbose: false });
+        expect(preparePlaywrightDatabases).toHaveBeenCalledWith('stamhoofd-e2e-mysql', 2, false);
         expect(startSharedServices).toHaveBeenCalledWith(context());
         expect(CaddyService.reload).toHaveBeenCalledWith(context());
 
@@ -95,6 +108,8 @@ describe('monorepo runner', () => {
         expect(playwrightRun?.[2].env).toMatchObject({
             DB_PORT: '55103',
             NODE_EXTRA_CA_CERTS: caddyRootCaPath(),
+            PLAYWRIGHT_WORKER_COUNT: '2',
+            STAMHOOFD_SKIP_PLAYWRIGHT_MIGRATIONS: 'true',
         });
     });
 });

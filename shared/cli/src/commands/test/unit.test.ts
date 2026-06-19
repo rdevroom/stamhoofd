@@ -47,13 +47,14 @@ describe('TestUnit command', () => {
 
     it('splits passthrough args when yarn strips the -- separator', () => {
         expect(splitCommandArgs([
+            '--clear',
             '--scope',
             '@stamhoofd/backend',
             'src/foo.test.ts',
             '--reporter',
             'hanging-process',
         ])).toEqual({
-            commandArgs: ['--scope', '@stamhoofd/backend', 'src/foo.test.ts'],
+            commandArgs: ['--clear', '--scope', '@stamhoofd/backend', 'src/foo.test.ts'],
             passthroughArgs: ['--reporter', 'hanging-process'],
         });
     });

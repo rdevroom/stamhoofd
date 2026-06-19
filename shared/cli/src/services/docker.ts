@@ -33,6 +33,28 @@ export async function removeContainer(name: string, verbose = false): Promise<vo
     await run(['rm', '-f', name], { quiet: true, allowFailure: true, verbose });
 }
 
+export async function imageExists(image: string): Promise<boolean> {
+    const result = await run(['image', 'inspect', image], { capture: true, quiet: true, allowFailure: true });
+    return result.status === 0;
+}
+
+export async function imageLabel(image: string, label: string): Promise<string | undefined> {
+    const result = await run(['image', 'inspect', '-f', `{{ index .Config.Labels "${label}" }}`, image], { capture: true, quiet: true, allowFailure: true });
+    if (result.status !== 0) {
+        return undefined;
+    }
+    const value = result.stdout.trim();
+    return value && value !== '<no value>' ? value : undefined;
+}
+
+export async function removeImage(image: string, verbose = false): Promise<void> {
+    await run(['rmi', '-f', image], { quiet: true, allowFailure: true, verbose });
+}
+
+export async function commitContainer(container: string, image: string, labels: Record<string, string>, verbose = false): Promise<void> {
+    await run(['commit', ...Object.entries(labels).flatMap(([key, value]) => ['--change', `LABEL ${key}=${JSON.stringify(value)}`]), container, image], { quiet: true, verbose });
+}
+
 export async function getContainerLogs(name: string, options: { tail?: number } = {}): Promise<string> {
     const result = await run(['logs', '--tail', String(options.tail ?? 50), name], { capture: true, allowFailure: true });
     return [result.stdout, result.stderr].filter(Boolean).join('\n').trim();

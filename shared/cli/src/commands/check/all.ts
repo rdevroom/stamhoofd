@@ -16,7 +16,7 @@ export default class CheckAll extends BaseCommand {
         await buildAll(context);
         await lint(context);
         await typecheck(context);
-        await testUnit(context, { ci: true });
+        await testUnit(context, { ci: true, clear: false });
         await testE2e(context, { ci: true, clear: false, ui: false });
     }
 }
