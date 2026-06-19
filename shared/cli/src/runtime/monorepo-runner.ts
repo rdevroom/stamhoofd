@@ -66,10 +66,26 @@ export async function migrate(context: CliContext): Promise<void> {
     await run('yarn', ['-s', 'lerna', 'run', 'migrations', '--concurrency', '1'], { cwd: context.rootDir, env: { ...buildBackendEnv(context) }, verbose: context.verbose });
 }
 
-export async function testUnit(context: CliContext, ci: boolean): Promise<void> {
+export type TestUnitOptions = {
+    ci: boolean;
+    scopes?: string[];
+    vitestArgs?: string[];
+};
+
+export async function testUnit(context: CliContext, options: TestUnitOptions): Promise<void> {
     const dbPort = await startTestMysql(context);
     try {
-        await run('yarn', ['-s', 'lerna', 'run', 'test', '--ignore', '@stamhoofd/playwright', '--ignore', '@stamhoofd/dashboard'], { cwd: context.rootDir, env: { NX_DAEMON: 'false', CI: ci ? 'true' : undefined, DB_PORT: dbPort }, verbose: context.verbose });
+        await run('npx', [
+            'lerna',
+            'run',
+            'test',
+            '--ignore',
+            '@stamhoofd/playwright',
+            '--ignore',
+            '@stamhoofd/dashboard',
+            ...(options.scopes ?? []).flatMap(scope => ['--scope', scope]),
+            ...((options.vitestArgs?.length ?? 0) > 0 ? ['--', ...(options.vitestArgs ?? [])] : []),
+        ], { cwd: context.rootDir, env: { NX_DAEMON: 'false', CI: options.ci ? 'true' : undefined, DB_PORT: dbPort }, verbose: context.verbose });
     }
     finally {
         await docker.removeContainer(testMysqlContainer, context.verbose);

@@ -14,7 +14,7 @@ export default class TestAll extends BaseCommand {
     async run(): Promise<void> {
         const { flags } = await this.parse(TestAll);
         const context = await this.createContext(flags);
-        await testUnit(context, flags.ci);
+        await testUnit(context, { ci: flags.ci });
         await testE2e(context, { ci: flags.ci, clear: false, ui: false });
     }
 }
